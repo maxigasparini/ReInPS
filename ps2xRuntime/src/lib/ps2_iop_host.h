@@ -52,6 +52,9 @@ public:
     uint32_t allocateGuest(uint32_t size, uint32_t alignment) override;
     void freeGuest(uint32_t address) override;
 
+    uint32_t allocateIopMemory(uint32_t size) override;
+    bool freeIopMemory(uint32_t address) override;
+
     void audioCommand(uint32_t sid,
                       uint32_t function,
                       ps2x::iop::GuestBuffer send,

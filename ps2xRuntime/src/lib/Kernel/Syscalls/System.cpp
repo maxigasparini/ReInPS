@@ -252,28 +252,31 @@ namespace ps2_syscalls
 
     void GetRomName(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        uint32_t bufAddr = getRegU32(ctx, 4); // $a0
-        size_t bufSize = getRegU32(ctx, 5);   // $a1
-        char *hostBuf = reinterpret_cast<char *>(getMemPtr(rdram, bufAddr));
-        const char *romName = "ROMVER 0100";
-
+        (void)runtime;
+        const uint32_t bufAddr = getRegU32(ctx, 4); // $a0
+        char *hostBuf =
+        reinterpret_cast<char *>(getMemPtr(rdram, bufAddr));
         if (!hostBuf)
         {
-            std::cerr << "GetRomName error: Invalid buffer address" << std::endl;
-            setReturnS32(ctx, -1); // Error
-            return;
-        }
-        if (bufSize == 0)
-        {
-            setReturnS32(ctx, 0);
-            return;
-        }
+        std::cerr
+            << "GetRomName error: Invalid buffer address"
+            << std::endl;
 
-        strncpy(hostBuf, romName, bufSize - 1);
-        hostBuf[bufSize - 1] = '\0';
-
-        // returns the length of the string (excluding null?) or error
-        setReturnS32(ctx, (int32_t)strlen(hostBuf));
+        setReturnU32(ctx, 0);
+        return;
+        }
+        // Synthetic ROMVER.
+        // PS2 format: VVVVRTYYYYMMDD
+        // GetRomName copies exactly 14 bytes, without a null terminator.
+        static constexpr char romName[14] = {
+            '0', '2', '0', '0',
+            'A', 'C',
+            '2', '0', '0', '0',
+            '0', '1', '0', '1'
+        };
+        memcpy(hostBuf, romName, sizeof(romName));
+        // Original GetRomName returns the supplied buffer pointer.
+        setReturnU32(ctx, bufAddr);
     }
 
     void SifLoadElfPart(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)

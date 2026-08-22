@@ -64,6 +64,19 @@ namespace ps2x::iop
         virtual bool normalizeGuestAddress(uint32_t address, uint32_t &normalized) const = 0;
         virtual uint32_t allocateIopHandle(IopHandleKind kind) = 0;
         virtual uint32_t allocateGuest(uint32_t size, uint32_t alignment) = 0;
+
+	virtual uint32_t allocateIopMemory(uint32_t size)
+	{
+	    (void)size;
+	    return 0u;
+	}
+
+	virtual bool freeIopMemory(uint32_t address)
+	{
+    	    (void)address;
+    	    return false;
+	}
+
         virtual void freeGuest(uint32_t address) = 0;
 
         virtual void audioCommand(uint32_t sid, uint32_t function, GuestBuffer send, GuestBuffer receive) = 0;

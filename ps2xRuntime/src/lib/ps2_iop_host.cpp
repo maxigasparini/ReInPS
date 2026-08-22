@@ -239,6 +239,16 @@ void PS2IopHostAdapter::freeGuest(uint32_t address)
     m_runtime.guestFree(address);
 }
 
+uint32_t PS2IopHostAdapter::allocateIopMemory(uint32_t size)
+{
+    return ps2_stubs::allocateSifIopHeapMemory(size);
+}
+
+bool PS2IopHostAdapter::freeIopMemory(uint32_t address)
+{
+    return ps2_stubs::freeSifIopHeapMemory(address);
+}
+
 void PS2IopHostAdapter::audioCommand(uint32_t sid,
                                      uint32_t function,
                                      ps2x::iop::GuestBuffer send,

@@ -429,6 +429,16 @@ namespace ps2_stubs
         return true;
     }
 
+    uint32_t allocateSifIopHeapMemory(uint32_t size)
+    {
+        return allocateSifHeapBlock(size);
+    }
+
+    bool freeSifIopHeapMemory(uint32_t address)
+    {
+        return freeSifHeapBlock(address);
+    }
+
     void resetSifState()
     {
         std::lock_guard<std::mutex> lock(g_sifCmdStateMutex);

@@ -12,6 +12,9 @@ namespace ps2_stubs
     bool writeSifIopHeap(uint32_t address, const void *source, size_t size);
     bool zeroSifIopHeap(uint32_t address, size_t size);
 
+    uint32_t allocateSifIopHeapMemory(uint32_t size);
+    bool freeSifIopHeapMemory(uint32_t address);
+
     void sceSifCmdIntrHdlr(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
     void sceSifLoadModule(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
     void sceSifSendCmd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
