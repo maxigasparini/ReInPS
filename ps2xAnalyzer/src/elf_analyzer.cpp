@@ -359,8 +359,10 @@ namespace ps2recomp
 
             const auto &instructions = getDecodedInstructions(func);
 
-            for (const auto &inst : instructions)
+            for (size_t index = 0; index < instructions.size(); ++index)
             {
+		const auto &inst = instructions[index];
+
                 if (inst.opcode == OPCODE_LW || inst.opcode == OPCODE_SW ||
                     inst.opcode == OPCODE_LB || inst.opcode == OPCODE_SB ||
                     inst.opcode == OPCODE_LH || inst.opcode == OPCODE_SH ||
@@ -421,63 +423,70 @@ namespace ps2recomp
                         }
                     }
                     // Also check for direct addressing with LUI+ADDIU combinations
-                    else if (inst.opcode == OPCODE_LW || inst.opcode == OPCODE_SW)
-                    {
-                        // Look for the LUI instruction that sets up the high bits
-                        uint32_t baseAddr = 0;
-                        for (int i = 1; i <= 5 && static_cast<int>(inst.address) - i * 4 >= static_cast<int>(func.start); i++)
-                        {
-                            uint32_t prevAddr = inst.address - i * 4;
-                            uint32_t prevInst = 0;
-                            if (!tryReadWord(m_elfParser.get(), prevAddr, prevInst))
-                            {
-                                continue;
-                            }
+                    // Resolve direct addressing such as:
+		// LUI + LW/SW
+		// LUI + ORI + LW/SW
+		// LUI + ADDIU + LW/SW
+		else if (inst.opcode == OPCODE_LW || inst.opcode == OPCODE_SW)
+		{
+		    uint32_t targetAddr = 0;
 
-                            // Check if it's a LUI instruction for the same register
-                            if (OPCODE(prevInst) == OPCODE_LUI && RT(prevInst) == inst.rs)
-                            {
-                                baseAddr = IMMEDIATE(prevInst) << 16;
-                                break;
-                            }
-                        }
+		    if (tryResolveBasePlusOffset(
+		            instructions,
+		            index,
+		            inst.rs,
+		            static_cast<int16_t>(inst.immediate),
+		            targetAddr))
+		    {
+		        // Detect MMIO accesses
+		        if ((targetAddr >= 0x10000000 && targetAddr < 0x14000000) || // I/O
+		            (targetAddr >= 0x70000000 && targetAddr < 0x70004000))   // Scratchpad
+		        {
+		            m_mmioByInstructionAddress[inst.address] = targetAddr;
 
-                        if (baseAddr != 0)
-                        {
-                            uint32_t targetAddr = baseAddr + static_cast<int16_t>(inst.immediate);
+		            std::cout << "Detected MMIO access at "
+		                      << std::hex << inst.address
+		                      << " -> " << targetAddr
+		                      << std::dec << std::endl;
+		        }
 
-                            // Detect MMIO accesses
-                            if ((targetAddr >= 0x10000000 && targetAddr < 0x14000000) || // I/O
-                                (targetAddr >= 0x70000000 && targetAddr < 0x70004000))   // Scratchpad
-                            {
-                                m_mmioByInstructionAddress[inst.address] = targetAddr;
-                                std::cout << "Detected MMIO access at " << std::hex << inst.address
-                                          << " -> " << targetAddr << std::dec << std::endl;
-                            }
+		        for (const auto &section : m_context.sections)
+		        {
+		            if (targetAddr >= section.address &&
+		                targetAddr < section.address + section.size)
+		            {
+		                auto symIt = std::find_if(
+		                    m_context.symbols.begin(),
+		                    m_context.symbols.end(),
+		                    [targetAddr](const Symbol &s)
+		                    {
+		                        return !s.isFunction &&
+		                               s.address <= targetAddr &&
+		                               s.address + s.size > targetAddr;
+		                    });
 
-                            for (const auto &section : m_context.sections)
-                            {
-                                if (targetAddr >= section.address && targetAddr < section.address + section.size)
-                                {
-                                    auto symIt = std::find_if(m_context.symbols.begin(), m_context.symbols.end(),
-                                                              [targetAddr](const Symbol &s)
-                                                              { return !s.isFunction && s.address <= targetAddr &&
-                                                                       s.address + s.size > targetAddr; });
+		                if (symIt != m_context.symbols.end())
+		                {
+		                    std::cout
+		                        << "Function " << func.name
+		                        << " directly accesses "
+		                        << (inst.opcode == OPCODE_LW
+		                                ? "reads from"
+		                                : "writes to")
+		                        << " data symbol "
+		                        << symIt->name
+		                        << " at 0x"
+		                        << std::hex << targetAddr
+		                        << std::dec << std::endl;
 
-                                    if (symIt != m_context.symbols.end())
-                                    {
-                                        std::cout << "Function " << func.name << " directly accesses "
-                                                  << (inst.opcode == OPCODE_LW ? "reads from" : "writes to")
-                                                  << " data symbol " << symIt->name
-                                                  << " at 0x" << std::hex << targetAddr << std::dec << std::endl;
+		                    m_functionDataUsage[func.name].insert(symIt->name);
+		                }
 
-                                        m_functionDataUsage[func.name].insert(symIt->name);
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                    }
+		                break;
+		            }
+		        }
+		    }
+		}
                 }
             }
         }
