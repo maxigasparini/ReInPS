@@ -1776,8 +1776,13 @@ PresentationFrame GSCpuBackend::PresentFromLocalMemory(const GSPresentationReque
     PresentationFrame result{};
     const GSPmodeState pmode = decodePmode(request.pmode);
     const GSSmode2State smode2 = decodeSMode2(request.smode2);
-    const bool fieldMode = smode2.interlaced && !smode2.frameMode;
-    const bool oddField = (request.vsyncTick & 1ull) != 0ull;
+    //const bool fieldMode = smode2.interlaced && !smode2.frameMode;
+    // Local-memory presentation already contains both interlaced fields.
+    // Present the complete framebuffer as a weave-style progressive frame.
+    //
+    // Applying bob-style field expansion here causes alternating even/odd
+    // scanlines to shift vertically on progressive displays.
+    //const bool oddField = (request.vsyncTick & 1ull) != 0ull;
     const GSFrameReg displayFrame1 = decodeDisplayFrame(request.dispfb1);
     const GSFrameReg displayFrame2 = decodeDisplayFrame(request.dispfb2);
     const GSDisplayReadOrigin origin1 = decodeDisplayReadOrigin(request.dispfb1);
@@ -1870,8 +1875,8 @@ PresentationFrame GSCpuBackend::PresentFromLocalMemory(const GSPresentationReque
                     dst[3] = pmode.amod ? dst[3] : src[3];
                 }
             normalizePresentationAlpha(result.pixels, result.width, result.height);
-            if (fieldMode)
-                applyFieldPresentation(result.pixels, result.width, result.height, oddField);
+            //if (fieldMode)
+            //    applyFieldPresentation(result.pixels, result.width, result.height, oddField);
             result.displayFbp = displayFrame1.fbp;
             result.sourceFbp = selected1.fbp;
             return result;
@@ -1885,8 +1890,8 @@ PresentationFrame GSCpuBackend::PresentFromLocalMemory(const GSPresentationReque
     GSFrameReg selected = displayFrame;
     if (!copySource(displayFrame, origin, result.width, result.height, true, false, selected, result.pixels, result.usedPreferred))
         return {};
-    if (fieldMode)
-        applyFieldPresentation(result.pixels, result.width, result.height, oddField);
+    //if (fieldMode)
+    //    applyFieldPresentation(result.pixels, result.width, result.height, oddField);
     normalizePresentationAlpha(result.pixels, result.width, result.height);
     result.displayFbp = displayFrame.fbp;
     result.sourceFbp = selected.fbp;
