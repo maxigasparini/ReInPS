@@ -154,6 +154,7 @@ void GS::reset()
     m_trxpos = {};
     m_trxreg = {};
     m_trxdir = 3;
+    m_pendingGifImageBytes = 0;
     m_vtxCount = 0;
     m_vtxIndex = 0;
     m_preferredDisplaySourceFrame = {};
@@ -644,6 +645,26 @@ void GS::processGIFPacket(const uint8_t *data, uint32_t sizeBytes)
     if (!data || sizeBytes < 16 || !m_backend)
         return;
 
+    if (m_pendingGifImageBytes != 0u)
+    {
+        const uint32_t chunkBytes =
+            std::min(m_pendingGifImageBytes, sizeBytes);
+
+        if (chunkBytes != 0u)
+        {
+            processImageData(data, chunkBytes);
+
+            data += chunkBytes;
+            sizeBytes -= chunkBytes;
+            m_pendingGifImageBytes -= chunkBytes;
+        }
+
+        if (sizeBytes == 0u)
+        {
+            return;
+        }
+    }
+
     if (tryProcessNativeImageUploadPacket(data, sizeBytes))
         return;
 
@@ -727,11 +748,24 @@ void GS::processGIFPacket(const uint8_t *data, uint32_t sizeBytes)
         }
         else if (flg == GIF_FMT_IMAGE)
         {
-            uint32_t imageBytes = nloop * 16;
-            if (offset + imageBytes > sizeBytes)
-                imageBytes = sizeBytes - offset;
-            processImageData(data + offset, imageBytes);
-            offset += imageBytes;
+            const uint32_t imageBytes = nloop * 16u;
+            const uint32_t availableBytes = sizeBytes - offset;
+            const uint32_t chunkBytes =
+                std::min(imageBytes, availableBytes);
+
+            if (chunkBytes != 0u)
+            {
+                processImageData(data + offset, chunkBytes);
+                offset += chunkBytes;
+            }
+
+            if (chunkBytes < imageBytes)
+            {
+                m_pendingGifImageBytes =
+                    imageBytes - chunkBytes;
+
+                return;
+            }
         }
     }
 }
