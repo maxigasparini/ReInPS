@@ -21,6 +21,8 @@
 #include <limits>
 #include <functional>
 #include <thread>
+#include "ps2recomp/address_taken_code.h"
+#include <unordered_set>
 
 namespace fs = std::filesystem;
 
@@ -1881,6 +1883,61 @@ namespace ps2recomp
                 auto &targets = m_resumeEntryTargetsByOwner[owner->start];
                 targets.push_back(target);
             }
+        }
+
+                const auto addressTakenEntries =
+            discoverAddressTakenCodeEntries(m_sections);
+
+        std::unordered_set<uint32_t> uniqueAddressTakenTargets;
+
+        size_t addressTakenResumeTargets = 0;
+        size_t addressTakenKnownStarts = 0;
+        size_t addressTakenWithoutOwner = 0;
+
+        for (const auto &entry : addressTakenEntries)
+        {
+            const uint32_t target = entry.targetAddress;
+
+            // Multiple data locations may reference the same code address.
+            if (!uniqueAddressTakenTargets.insert(target).second)
+            {
+                continue;
+            }
+
+            const Function *owner = findContainingFunction(target);
+
+            if (!owner)
+            {
+                addressTakenWithoutOwner++;
+                continue;
+            }
+
+            // Already callable through the normal function entry.
+            if (owner->start == target)
+            {
+                addressTakenKnownStarts++;
+                continue;
+            }
+
+            m_resumeEntryTargetsByOwner[owner->start].push_back(target);
+            addressTakenResumeTargets++;
+        }
+
+        {
+            std::ostringstream msg;
+            msg << "address-taken code discovery: "
+                << addressTakenEntries.size()
+                << " reference(s), "
+                << uniqueAddressTakenTargets.size()
+                << " unique target(s), "
+                << addressTakenResumeTargets
+                << " resume entry point(s), "
+                << addressTakenKnownStarts
+                << " known function start(s), "
+                << addressTakenWithoutOwner
+                << " target(s) without recompiled owner";
+
+            m_reporter.progress(msg.str());
         }
 
         size_t totalTargets = 0u;
