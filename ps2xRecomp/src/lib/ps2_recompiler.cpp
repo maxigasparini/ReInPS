@@ -1885,8 +1885,29 @@ namespace ps2recomp
             }
         }
 
-                const auto addressTakenEntries =
-            discoverAddressTakenCodeEntries(m_sections);
+        const auto dataAddressTakenEntries =
+	discoverAddressTakenCodeEntries(m_sections);
+
+	const auto constructedCodeEntries =
+	discoverConstructedCodeEntries(
+	m_decodedFunctions,
+	m_sections);
+
+	std::vector<AddressTakenCodeEntry> addressTakenEntries;
+
+	addressTakenEntries.reserve(
+	dataAddressTakenEntries.size() +
+	constructedCodeEntries.size());
+
+	addressTakenEntries.insert(
+	addressTakenEntries.end(),
+	dataAddressTakenEntries.begin(),
+	dataAddressTakenEntries.end());
+
+	addressTakenEntries.insert(
+	addressTakenEntries.end(),
+	constructedCodeEntries.begin(),
+	constructedCodeEntries.end());
 
         std::unordered_set<uint32_t> uniqueAddressTakenTargets;
 
@@ -1925,7 +1946,11 @@ namespace ps2recomp
 
         {
             std::ostringstream msg;
-            msg << "address-taken code discovery: "
+            msg << "code-pointer discovery: "
+	    << dataAddressTakenEntries.size()
+	    << " data reference(s), "
+	    << constructedCodeEntries.size()
+	    << " constructed reference(s), "
                 << addressTakenEntries.size()
                 << " reference(s), "
                 << uniqueAddressTakenTargets.size()
