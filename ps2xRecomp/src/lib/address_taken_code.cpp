@@ -353,6 +353,112 @@ namespace ps2recomp
             }
         }
 
+        // Some code addresses are built from a long-lived upper-half
+        // constant rather than immediately after the LUI. This is common
+        // when a callee-saved register is used as a base across multiple
+        // basic blocks:
+        //
+        //   lui   s3, 0x1c
+        //   ...
+        //   addiu a1, s3, -0x38
+        //
+        // The local forward scan above intentionally stops at control
+        // transfers. For address-taken discovery we can conservatively
+        // look backwards for the nearest definition of the source
+        // register instead. Extra valid executable entry points are safe:
+        // they only become active if guest code actually dispatches to
+        // them.
+        constexpr size_t kMaxBackwardLookbehind = 96;
+
+        for (const auto &[functionAddress, instructions] :
+             decodedFunctions)
+        {
+            (void)functionAddress;
+
+            for (size_t i = 0;
+                 i < instructions.size();
+                 ++i)
+            {
+                const Instruction &low =
+                    instructions[i];
+
+                switch (low.opcode)
+                {
+                case OPCODE_ADDI:
+                case OPCODE_ADDIU:
+                case OPCODE_DADDI:
+                case OPCODE_DADDIU:
+                case OPCODE_ORI:
+                    break;
+
+                default:
+                    continue;
+                }
+
+                if (low.rs == 0)
+                {
+                    continue;
+                }
+
+                const uint32_t baseRegister =
+                    low.rs;
+
+                const size_t begin =
+                    i > kMaxBackwardLookbehind
+                        ? i - kMaxBackwardLookbehind
+                        : 0;
+
+                for (size_t j = i;
+                     j-- > begin;)
+                {
+                    const Instruction &definition =
+                        instructions[j];
+
+                    if (!instructionWritesRegister(
+                            definition,
+                            baseRegister))
+                    {
+                        continue;
+                    }
+
+                    // Only a LUI definition gives us a known upper-half
+                    // constant. Any other write kills the value we were
+                    // trying to trace.
+                    if (definition.opcode != OPCODE_LUI ||
+                        definition.rt != baseRegister)
+                    {
+                        break;
+                    }
+
+                    const uint32_t upperValue =
+                        (definition.immediate & 0xFFFFu) << 16;
+
+                    uint32_t candidate = 0;
+
+                    if (tryCombineUpperImmediate(
+                            low,
+                            baseRegister,
+                            upperValue,
+                            candidate) &&
+                        (candidate & 0x3u) == 0 &&
+                        isExecutableAddress(
+                            sections,
+                            candidate))
+                    {
+                        AddressTakenCodeEntry entry;
+                        entry.sourceAddress =
+                            low.address;
+                        entry.targetAddress =
+                            candidate;
+
+                        entries.push_back(entry);
+                    }
+
+                    break;
+                }
+            }
+        }
+
         std::sort(
             entries.begin(),
             entries.end(),
