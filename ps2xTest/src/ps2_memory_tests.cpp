@@ -497,6 +497,63 @@ void register_ps2_memory_tests()
             t.Equals(w, 0x22222222u, "V2-32 W should replicate source Y");
         });
 
+        tc.Run("VIF UNPACK V3-32 writes the following source word into W", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            std::memset(mem.getVU1Data(), 0, PS2_VU1_DATA_SIZE);
+
+            uint32_t oldW = 0xDEADBEEFu;
+            std::memcpy(mem.getVU1Data() + 12u, &oldW, 4u);
+
+            std::vector<uint8_t> packet;
+
+            appendU32(
+                packet,
+                makeVifCmd(
+                    0x01u,
+                    0u,
+                    static_cast<uint16_t>((1u << 8) | 1u))); // STCYCL: WL=1, CL=1
+
+            appendU32(
+                packet,
+                makeVifCmd(0x68u, 2u, 0u)); // UNPACK V3-32, NUM=2, ADDR=0
+
+            // First V3.
+            appendU32(packet, 0x11111111u); // AX
+            appendU32(packet, 0x22222222u); // AY
+            appendU32(packet, 0x33333333u); // AZ
+
+            // Second V3. Its X is also the fourth source word visible to the first V3.
+            appendU32(packet, 0xAAAAAAAAu); // BX
+            appendU32(packet, 0xBBBBBBBBu); // BY
+            appendU32(packet, 0xCCCCCCCCu); // BZ
+
+            mem.processVIF1Data(
+                packet.data(),
+                static_cast<uint32_t>(packet.size()));
+
+            const uint8_t *vu = mem.getVU1Data();
+
+            uint32_t x = 0u;
+            uint32_t y = 0u;
+            uint32_t z = 0u;
+            uint32_t w = 0u;
+
+            std::memcpy(&x, vu + 0u, 4u);
+            std::memcpy(&y, vu + 4u, 4u);
+            std::memcpy(&z, vu + 8u, 4u);
+            std::memcpy(&w, vu + 12u, 4u);
+
+            t.Equals(x, 0x11111111u, "V3-32 X should come from source X");
+            t.Equals(y, 0x22222222u, "V3-32 Y should come from source Y");
+            t.Equals(z, 0x33333333u, "V3-32 Z should come from source Z");
+            t.Equals(
+                w,
+                0xAAAAAAAAu,
+                "V3-32 W should come from the following source word");
+        });
+
         tc.Run("VIF control commands update MARK MASK ROW and COL registers", [](TestCase &t)
         {
             PS2Memory mem;
