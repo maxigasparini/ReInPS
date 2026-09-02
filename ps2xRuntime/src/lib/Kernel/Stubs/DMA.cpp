@@ -154,11 +154,144 @@ namespace ps2_stubs
         }
         setReturnU32(ctx, oldAddr);
     }
-
-    void sceDmaRecv(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+void sceDmaRecv(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+{
+    if (!runtime)
     {
-        TODO_NAMED("sceDmaRecv", rdram, ctx, runtime);
+        setReturnS32(ctx, -1);
+        return;
     }
+
+    const uint32_t chanArg = getRegU32(ctx, 4);
+    const uint32_t channelBase = resolveDmaChannelBase(rdram, chanArg);
+
+    // Channel 8: FromSPR.
+    constexpr uint32_t FROM_SPR = 0x1000D000u;
+
+    if (channelBase != FROM_SPR)
+    {
+        RUNTIME_LOG("[sceDmaRecv] unsupported channel=0x"
+                    << std::hex << channelBase << std::dec << std::endl);
+        setReturnS32(ctx, -1);
+        return;
+    }
+
+    PS2Memory &mem = runtime->memory();
+
+    uint32_t chcr = mem.readIORegister(FROM_SPR + 0x00u);
+    uint32_t madr = mem.readIORegister(FROM_SPR + 0x10u);
+    uint32_t qwc  = mem.readIORegister(FROM_SPR + 0x20u);
+    uint32_t sadr = mem.readIORegister(FROM_SPR + 0x80u) & 0x3FFFu;
+
+    const uint32_t mode = (chcr >> 2u) & 0x3u;
+
+    // STR = DMA active.
+    chcr |= 0x100u;
+    mem.writeIORegister(FROM_SPR + 0x00u, chcr);
+
+    auto copyFromSpr = [&](uint32_t count)
+    {
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            const uint32_t sprAddr =
+                0x70000000u | (sadr & 0x3FF0u);
+
+            const __m128i value = mem.read128(sprAddr);
+            mem.write128(madr, value);
+
+            sadr = (sadr + 16u) & 0x3FFFu;
+            madr += 16u;
+        }
+    };
+
+    if (mode == 0u)
+    {
+        // Normal mode:
+        // QWC quadwords from SPR[SADR] to RAM[MADR].
+        copyFromSpr(qwc);
+        qwc = 0u;
+    }
+    else if (mode == 1u)
+    {
+        // FromSPR uses destination-chain tags stored in scratchpad.
+        constexpr uint32_t TAG_CNTS = 0u;
+        constexpr uint32_t TAG_CNT  = 1u;
+        constexpr uint32_t TAG_END  = 7u;
+
+        bool finished = false;
+
+        for (uint32_t tagIndex = 0;
+             tagIndex < 4096u && !finished;
+             ++tagIndex)
+        {
+            const uint32_t tagAddr =
+                0x70000000u | (sadr & 0x3FF0u);
+
+            const uint64_t tag = mem.read64(tagAddr);
+
+            qwc = static_cast<uint32_t>(tag & 0xFFFFu);
+            const uint32_t id =
+                static_cast<uint32_t>((tag >> 28u) & 0x7u);
+
+            const bool irq =
+                (tag & 0x80000000ull) != 0ull;
+
+            madr =
+                static_cast<uint32_t>(tag >> 32u) &
+                0x7FFFFFFFu;
+
+            // Hardware consumes the 16-byte DMA tag first.
+            sadr = (sadr + 16u) & 0x3FFFu;
+
+            // Preserve the TAG field in CHCR.
+            chcr =
+                (chcr & 0x0000FFFFu) |
+                (static_cast<uint32_t>((tag >> 16u) & 0xFFFFu) << 16u);
+
+            copyFromSpr(qwc);
+            qwc = 0u;
+
+            if (id == TAG_END)
+            {
+                finished = true;
+            }
+            else if (id != TAG_CNTS && id != TAG_CNT)
+            {
+                RUNTIME_LOG("[sceDmaRecv:FromSPR] unsupported destination tag id="
+                            << id << std::endl);
+                finished = true;
+            }
+
+            // TIE + tag IRQ also terminates the chain.
+            if ((chcr & 0x80u) != 0u && irq)
+            {
+                finished = true;
+            }
+        }
+    }
+    else
+    {
+        RUNTIME_LOG("[sceDmaRecv:FromSPR] unsupported mode="
+                    << mode << std::endl);
+
+        chcr &= ~0x100u;
+        mem.writeIORegister(FROM_SPR + 0x00u, chcr);
+
+        setReturnS32(ctx, -1);
+        return;
+    }
+
+    // Store final hardware-visible channel state.
+    mem.writeIORegister(FROM_SPR + 0x10u, madr);
+    mem.writeIORegister(FROM_SPR + 0x20u, qwc);
+    mem.writeIORegister(FROM_SPR + 0x80u, sadr);
+
+    // DMA completes synchronously in the current runtime model.
+    chcr &= ~0x100u;
+    mem.writeIORegister(FROM_SPR + 0x00u, chcr);
+
+    setReturnS32(ctx, 0);
+}
 
     void sceDmaRecvI(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
