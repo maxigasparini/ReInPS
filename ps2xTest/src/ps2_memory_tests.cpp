@@ -603,6 +603,56 @@ void register_ps2_memory_tests()
             t.Equals(v3x, 0xAAAAAAAAu, "second vector should write at addr CL (addr 3)");
         });
 
+        tc.Run("VIF STCYCL WL zero is interpreted as 256", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            std::memset(mem.getVU1Data(), 0, PS2_VU1_DATA_SIZE);
+
+            std::vector<uint8_t> packet;
+
+            // STCYCL: WL=0 encodes 256, CL=1.
+            appendU32(packet, makeVifCmd(0x01u, 0u, 0x0001u));
+
+            // UNPACK V4-32, NUM=2, ADDR=0.
+            // With WL=256 and CL=1, only one source vector is consumed.
+            appendU32(packet, makeVifCmd(0x6Cu, 2u, 0u));
+
+            appendU32(packet, 0x11111111u);
+            appendU32(packet, 0x22222222u);
+            appendU32(packet, 0x33333333u);
+            appendU32(packet, 0x44444444u);
+
+            // This must remain a VIF command, not be consumed as UNPACK payload.
+            appendU32(packet, makeVifCmd(0x07u, 0u, 0x1234u)); // MARK
+
+            mem.processVIF1Data(
+                packet.data(),
+                static_cast<uint32_t>(packet.size()));
+
+            const uint8_t *vu = mem.getVU1Data();
+
+            uint32_t x = 0u;
+            uint32_t y = 0u;
+            uint32_t z = 0u;
+            uint32_t w = 0u;
+
+            std::memcpy(&x, vu + 0u, 4u);
+            std::memcpy(&y, vu + 4u, 4u);
+            std::memcpy(&z, vu + 8u, 4u);
+            std::memcpy(&w, vu + 12u, 4u);
+
+            t.Equals(x, 0x11111111u, "WL=0 should consume the first source vector");
+            t.Equals(y, 0x22222222u, "WL=0 first vector Y");
+            t.Equals(z, 0x33333333u, "WL=0 first vector Z");
+            t.Equals(w, 0x44444444u, "WL=0 first vector W");
+
+            t.Equals(
+                mem.vif1_regs.mark,
+                0x1234u,
+                "WL=0 should mean 256 and leave the following MARK command unconsumed");
+        });
+
         tc.Run("VIF masked UNPACK uses data row col and protect selectors", [](TestCase &t)
         {
             PS2Memory mem;
@@ -657,6 +707,12 @@ void register_ps2_memory_tests()
             std::memset(mem.getVU1Data(), 0, PS2_VU1_DATA_SIZE);
 
             std::vector<uint8_t> packet;
+            appendU32(
+            packet,
+            makeVifCmd(
+                0x01u,
+                0u,
+                static_cast<uint16_t>((1u << 8) | 1u))); // STCYCL: WL=1, CL=1
             appendU32(packet, makeVifCmd(0x30u, 0u, 0u)); // STROW
             appendU32(packet, 10u);
             appendU32(packet, 20u);

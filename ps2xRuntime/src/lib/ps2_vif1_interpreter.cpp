@@ -528,7 +528,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
             if (cl == 0u)
                 cl = 1u;
             if (wl == 0u)
-                wl = 1u;
+                wl = 256u;
 
             uint32_t sourceVectorCount = writeVectorCount;
             if (cl < wl)
