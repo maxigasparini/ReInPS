@@ -651,11 +651,10 @@ void VU1Interpreter::queueP(float value, uint32_t latency)
     }
     reportReservedInstruction(false, 0xFFFFFFF9u);
 }
-
 void VU1Interpreter::queueStore(uint32_t address, const uint32_t words[4], uint8_t laneMask)
 {
     for (PendingStore &store : m_storePipeline)
-    {
+   {
         if (!store.valid)
         {
             store.valid = true;
@@ -796,7 +795,7 @@ void VU1Interpreter::commitReadyPipelines()
                     oldWords[component] = store.words[component];
             }
             std::memcpy(m_activeVuData + store.address, oldWords, sizeof(oldWords));
-        }
+	}
         store = {};
     }
 
@@ -851,7 +850,7 @@ void VU1Interpreter::progressXgkick()
         m_xgkick.cycleCredit -= 2u;
         if (m_xgkick.copiedBytes > XgkickPipeline::kBufferSize - 16u)
         {
-            reportReservedInstruction(false, 0xFFFFFFFBu);
+	    reportReservedInstruction(false, 0xFFFFFFFBu);
             m_xgkick.active = false;
             return;
         }
@@ -879,7 +878,7 @@ void VU1Interpreter::progressXgkick()
                 tagBytes += static_cast<uint64_t>(nloop) * nreg * 16u;
             else if (format == 1u)
                 tagBytes += ((static_cast<uint64_t>(nloop) * nreg + 1u) & ~1ull) * 8u;
-            else if (format == 2u)
+            else if (format == 2u || format == 3u)
                 tagBytes += static_cast<uint64_t>(nloop) * 16u;
             else
             {
@@ -888,12 +887,30 @@ void VU1Interpreter::progressXgkick()
                 return;
             }
 
-            if (tagBytes > XgkickPipeline::kBufferSize - qwordOffset)
+           if (tagBytes > XgkickPipeline::kBufferSize - qwordOffset)
             {
-                reportReservedInstruction(false, 0xFFFFFFFBu);
+                std::cerr
+                    << "[xgkick:tag-too-large]"
+                    << " cycle=" << m_cycle
+                    << " issueCycle=" << m_xgkick.issueCycle
+                    << " issuePc=0x" << std::hex << m_xgkick.issuePc
+                    << " source=0x" << m_xgkick.sourceAddress
+                    << " offset=0x" << qwordOffset
+                    << " tagLo=0x" << tagLo
+                    << std::dec
+                    << " nloop=" << nloop
+                    << " format=" << format
+                    << " nreg=" << nreg
+                    << " tagBytes=" << tagBytes
+                    << '\n';
+
+                // TEMP bring-up:
+                // Drop only the malformed PATH1 transfer. Do not stop the whole
+                // VU1 invocation while the upstream producer is still under investigation.
                 m_xgkick.active = false;
                 return;
             }
+
             m_xgkick.currentTagEnd = qwordOffset + static_cast<uint32_t>(tagBytes);
             m_xgkick.currentTagEop = ((tagLo >> 15) & 1u) != 0u;
             if (m_xgkick.currentTagEop)
@@ -913,32 +930,42 @@ void VU1Interpreter::progressXgkick()
         }
     }
 }
-
 void VU1Interpreter::finishXgkick()
 {
     if (!m_xgkick.active)
         return;
 
     if (m_activeMemory)
-        m_activeMemory->submitGifPacket(GifPathId::Path1, m_xgkick.packet.data(), m_xgkick.totalBytes);
+    {
+        m_activeMemory->submitGifPacket(
+            GifPathId::Path1,
+            m_xgkick.packet.data(),
+            m_xgkick.totalBytes);
+    }
     else if (m_activeGs)
-        m_activeGs->processGIFPacket(m_xgkick.packet.data(), m_xgkick.totalBytes);
+    {
+        m_activeGs->processGIFPacket(
+            m_xgkick.packet.data(),
+            m_xgkick.totalBytes);
+    }
+
     m_xgkick.active = false;
 }
-
 void VU1Interpreter::startXgkick(uint32_t qwordAddress)
 {
     if (m_unit != Unit::VU1 || !m_activeVuData || m_activeVuDataSize < 16u)
         return;
 
-    const uint32_t sourceAddress = (qwordAddress * 16u) % m_activeVuDataSize;
+    const uint32_t sourceAddress =
+        (qwordAddress * 16u) % m_activeVuDataSize;
+
     m_xgkick = {};
     m_xgkick.active = true;
     m_xgkick.sourceAddress = sourceAddress;
     m_xgkick.cycleCredit = 1u; // XGKICK's issue cycle counts toward PATH1.
     m_xgkick.issueCycle = m_cycle;
+    m_xgkick.issuePc = m_state.pc;
 }
-
 void VU1Interpreter::advanceOneCycle()
 {
     ++m_cycle;
@@ -1685,8 +1712,10 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
         float newAcc[4]{};
         if (hasUpperWrite)
             std::memcpy(oldUpperVf, m_state.vf[upperWrite.reg], sizeof(oldUpperVf));
-        if (hasDistinctLowerWrite)
+            
+            if (hasDistinctLowerWrite)
             std::memcpy(oldLowerVf, m_state.vf[lowerWrite.reg], sizeof(oldLowerVf));
+
         if (decoded.upperUsage.accWrite != 0u)
             std::memcpy(oldAcc, m_state.acc, sizeof(oldAcc));
 
@@ -1727,6 +1756,7 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
         if (hasUpperWrite)
         {
             std::memcpy(newUpperVf, m_state.vf[upperWrite.reg], sizeof(newUpperVf));
+
             std::memcpy(m_state.vf[upperWrite.reg], oldUpperVf, sizeof(oldUpperVf));
             const uint32_t latency =
                 decoded.upperUsage.vfLatency != 0u
@@ -1752,16 +1782,18 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
             queueAccWrite(decoded.upperUsage.accWrite, newAcc,
                           kAccForwardLatency);
         }
-        if (writtenVi != 0u)
-        {
-            const int32_t newVi = m_state.vi[writtenVi];
-            m_state.vi[writtenVi] = oldVi;
-            const uint32_t latency =
-                decoded.lowerUsage.viLatency != 0u
-                    ? decoded.lowerUsage.viLatency
-                    : decoded.lowerUsage.latency;
-            queueViWrite(writtenVi, newVi, latency);
-        }
+	if (writtenVi != 0u)
+	{
+	    const int32_t newVi = m_state.vi[writtenVi];
+	    m_state.vi[writtenVi] = oldVi;
+
+	    const uint32_t latency =
+	        decoded.lowerUsage.viLatency != 0u
+	            ? decoded.lowerUsage.viLatency
+	            : decoded.lowerUsage.latency;
+
+	    queueViWrite(writtenVi, newVi, latency);
+	}
 
         markPairWrites(decoded);
         if (writtenVi != 0u && decoded.lowerUsage.delaysNextBranchRead)

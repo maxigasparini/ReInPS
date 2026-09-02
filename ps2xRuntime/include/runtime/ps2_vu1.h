@@ -184,9 +184,13 @@ private:
         uint32_t sourceAddress = 0;
         uint32_t totalBytes = 0;
         uint32_t copiedBytes = 0;
+
         uint32_t currentTagEnd = 0;
         uint32_t cycleCredit = 0;
+
         uint64_t issueCycle = 0;
+	uint32_t issuePc = 0;
+
         bool active = false;
         bool currentTagEop = false;
     };

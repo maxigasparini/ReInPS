@@ -7,9 +7,15 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <iostream>
+#include <atomic>
 
 namespace
 {
+    constexpr uint32_t kVuBringupTraceLimit = 64u;
+
+    std::atomic<uint32_t> g_sq228TraceCount{0u};
+    std::atomic<uint32_t> g_lqi1f30TraceCount{0u};
     float vuEatan(float value)
     {
         constexpr float coefficients[] = {
@@ -103,14 +109,62 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
         uint8_t it = VIT(instr); // VI base
         uint8_t dest = (instr >> 21) & 0xF;
         int16_t imm = IMM11(instr);
-        uint32_t addr = ((uint32_t)(int32_t)(m_state.vi[it] + imm)) * 16u;
+
+        uint32_t addr =
+            ((uint32_t)(int32_t)(m_state.vi[it] + imm)) * 16u;
+
         addr &= (dataSize - 1);
+
         if (addr + 16 <= dataSize)
         {
             uint32_t words[4]{};
-            std::memcpy(words, m_state.vf[is], sizeof(words));
-            queueStore(addr, words, dest);
+
+            std::memcpy(
+                words,
+                m_state.vf[is],
+                sizeof(words));
+
+            if (m_unit == Unit::VU1 &&
+                m_state.pc == 0x228u)
+            {
+                const uint32_t traceIndex =
+                    g_sq228TraceCount.fetch_add(
+                        1u,
+                        std::memory_order_relaxed);
+
+                if (traceIndex < kVuBringupTraceLimit)
+                {
+                    std::cerr
+                        << "[vu1:sq-228]"
+                        << " cycle=" << m_cycle
+                        << " instr=0x" << std::hex << instr
+                        << " upper=0x" << upperInstr
+                        << std::dec
+                        << " vfS=" << static_cast<uint32_t>(is)
+                        << " viT=" << static_cast<uint32_t>(it)
+                        << " viValue=" << m_state.vi[it]
+                        << " imm=" << imm
+                        << " addr=0x" << std::hex << addr
+                        << std::dec
+                        << '\n';
+
+                    std::cerr
+                        << "[vu1:sq-228-vf]"
+                        << " w0=0x" << std::hex << words[0]
+                        << " w1=0x" << words[1]
+                        << " w2=0x" << words[2]
+                        << " w3=0x" << words[3]
+                        << std::dec
+                        << '\n';
+                }
+            }
+
+            queueStore(
+                addr,
+                words,
+                dest);
         }
+
         return;
     }
     case 0x04: // ILW (Integer Load Word from VU data memory)
@@ -442,16 +496,72 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
             }
             case 0x34: // LQI (Load Quadword, post-increment)
             {
-                uint32_t addr = ((uint32_t)(uint16_t)m_state.vi[viS]) * 16u;
+                const int32_t viBefore = m_state.vi[viS];
+
+                uint32_t addr =
+                    ((uint32_t)(uint16_t)m_state.vi[viS]) * 16u;
+
                 addr &= (dataSize - 1);
+
                 if (addr + 16 <= dataSize)
                 {
                     float tmp[4];
-                    std::memcpy(tmp, vuData + addr, 16);
-                    applyDest(m_state.vf[vfT], tmp, dest);
+
+                    std::memcpy(
+                        tmp,
+                        vuData + addr,
+                        16);
+
+                    if (m_unit == Unit::VU1 &&
+                        m_state.pc == 0x1F30u &&
+                        vfT == 3u)
+                    {
+                        const uint32_t traceIndex =
+                            g_lqi1f30TraceCount.fetch_add(
+                                1u,
+                                std::memory_order_relaxed);
+
+                        if (traceIndex < kVuBringupTraceLimit)
+                        {
+                            uint32_t words[4]{};
+
+                            std::memcpy(
+                                words,
+                                tmp,
+                                sizeof(words));
+
+                            std::cerr
+                                << "[vu1:lqi-1f30]"
+                                << " cycle=" << m_cycle
+                                << " pc=0x" << std::hex << m_state.pc
+                                << " instr=0x" << instr
+                                << std::dec
+                                << " vfT=" << static_cast<uint32_t>(vfT)
+                                << " viS=" << static_cast<uint32_t>(viS)
+                                << " viBefore=" << viBefore
+                                << " addr=0x" << std::hex << addr
+                                << " dest=0x"
+                                << static_cast<uint32_t>(dest)
+                                << " words="
+                                << words[0] << ","
+                                << words[1] << ","
+                                << words[2] << ","
+                                << words[3]
+                                << std::dec
+                                << '\n';
+                        }
+                    }
+
+                    applyDest(
+                        m_state.vf[vfT],
+                        tmp,
+                        dest);
                 }
+
                 if (viS != 0)
-                    m_state.vi[viS] = (int16_t)(m_state.vi[viS] + 1);
+                    m_state.vi[viS] =
+                        (int16_t)(m_state.vi[viS] + 1);
+
                 return;
             }
             case 0x35: // SQI (Store Quadword, post-increment)
@@ -665,7 +775,9 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
                 return;
             }
             case 0x6C: // XGKICK - send GIF packet from VU1 data memory
-                startXgkick(static_cast<uint32_t>(static_cast<uint16_t>(m_state.vi[viS])));
+                startXgkick(
+                    static_cast<uint32_t>(
+                        static_cast<uint16_t>(m_state.vi[viS])));
                 return;
             case 0x70: // ESADD
             {
