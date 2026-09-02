@@ -497,6 +497,130 @@ void register_ps2_memory_tests()
             t.Equals(w, 0x22222222u, "V2-32 W should replicate source Y");
         });
 
+        tc.Run("VIF UNPACK V3-8 zeros W when the fourth value ends on a QW boundary", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            std::memset(mem.getVU1Data(), 0, PS2_VU1_DATA_SIZE);
+
+            uint32_t oldW = 0xDEADBEEFu;
+            std::memcpy(mem.getVU1Data() + 12u, &oldW, 4u);
+
+            std::vector<uint8_t> packet;
+
+            appendU32(
+                packet,
+                makeVifCmd(
+                    0x01u,
+                    0u,
+                    static_cast<uint16_t>((1u << 8) | 1u))); // STCYCL: WL=1, CL=1
+
+            appendU32(
+                packet,
+                makeVifCmd(0x07u, 0u, 0x1234u)); // MARK: shift payload alignment by 4 bytes
+
+            appendU32(
+                packet,
+                makeVifCmd(0x6Au, 2u, 0u)); // UNPACK V3-8, NUM=2, ADDR=0
+
+            // Payload begins at byte 12.
+            packet.push_back(0x11u); // 0x0C AX
+            packet.push_back(0x22u); // 0x0D AY
+            packet.push_back(0x33u); // 0x0E AZ
+
+            packet.push_back(0x44u); // 0x0F BX -> ends exactly on QW boundary
+            packet.push_back(0x55u); // 0x10 BY
+            packet.push_back(0x66u); // 0x11 BZ
+
+            // 6-byte V3-8 payload is padded to 8 bytes.
+            packet.push_back(0u);
+            packet.push_back(0u);
+
+            mem.processVIF1Data(
+                packet.data(),
+                static_cast<uint32_t>(packet.size()));
+
+            const uint8_t *vu = mem.getVU1Data();
+
+            uint32_t x = 0u;
+            uint32_t y = 0u;
+            uint32_t z = 0u;
+            uint32_t w = 0u;
+
+            std::memcpy(&x, vu + 0u, 4u);
+            std::memcpy(&y, vu + 4u, 4u);
+            std::memcpy(&z, vu + 8u, 4u);
+            std::memcpy(&w, vu + 12u, 4u);
+
+            t.Equals(x, 0x11u, "V3-8 boundary X");
+            t.Equals(y, 0x22u, "V3-8 boundary Y");
+            t.Equals(z, 0x33u, "V3-8 boundary Z");
+            t.Equals(
+                w,
+                0u,
+                "V3-8 W should become zero when its source ends on a QW boundary");
+        });
+
+        tc.Run("VIF UNPACK V3-8 writes the following source value into W", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            std::memset(mem.getVU1Data(), 0, PS2_VU1_DATA_SIZE);
+
+            uint32_t oldW = 0xDEADBEEFu;
+            std::memcpy(mem.getVU1Data() + 12u, &oldW, 4u);
+
+            std::vector<uint8_t> packet;
+
+            appendU32(
+                packet,
+                makeVifCmd(
+                    0x01u,
+                    0u,
+                    static_cast<uint16_t>((1u << 8) | 1u))); // STCYCL: WL=1, CL=1
+
+            appendU32(
+                packet,
+                makeVifCmd(0x6Au, 2u, 0u)); // UNPACK V3-8, NUM=2, ADDR=0
+
+            // Payload begins at byte 8.
+            packet.push_back(0x11u); // 0x08 AX
+            packet.push_back(0x22u); // 0x09 AY
+            packet.push_back(0x33u); // 0x0A AZ
+
+            packet.push_back(0x44u); // 0x0B BX -> W for first V3
+            packet.push_back(0x55u); // 0x0C BY
+            packet.push_back(0x66u); // 0x0D BZ
+
+            // 6-byte V3-8 payload is padded to 8 bytes.
+            packet.push_back(0u);
+            packet.push_back(0u);
+
+            mem.processVIF1Data(
+                packet.data(),
+                static_cast<uint32_t>(packet.size()));
+
+            const uint8_t *vu = mem.getVU1Data();
+
+            uint32_t x = 0u;
+            uint32_t y = 0u;
+            uint32_t z = 0u;
+            uint32_t w = 0u;
+
+            std::memcpy(&x, vu + 0u, 4u);
+            std::memcpy(&y, vu + 4u, 4u);
+            std::memcpy(&z, vu + 8u, 4u);
+            std::memcpy(&w, vu + 12u, 4u);
+
+            t.Equals(x, 0x11u, "V3-8 X should come from source X");
+            t.Equals(y, 0x22u, "V3-8 Y should come from source Y");
+            t.Equals(z, 0x33u, "V3-8 Z should come from source Z");
+            t.Equals(
+                w,
+                0x44u,
+                "V3-8 W should come from the following source value");
+        });
+
         tc.Run("VIF UNPACK V3-16 writes the following source value into W", [](TestCase &t)
         {
             PS2Memory mem;

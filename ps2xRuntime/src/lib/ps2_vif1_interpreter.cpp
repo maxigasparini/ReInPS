@@ -743,6 +743,31 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                         decompressed[3] = w;
                     }
 
+                    else if (handledFormat && decoded && components == 3 && vl == 2u)
+                    {
+                        uint32_t w = 0u;
+
+                        const size_t sourceOffset =
+                            static_cast<size_t>(srcVec - data);
+
+                        const size_t payloadOffset =
+                            static_cast<size_t>(srcVec - srcBase);
+
+                        // V3-8 normally observes the following 8-bit source value as W.
+                        // Hardware returns zero when that fourth value ends exactly on a
+                        // 128-bit/QW boundary.
+                        const bool endsOnQwBoundary =
+                            ((sourceOffset + 4u) & 0xFu) == 0u;
+
+                        if (!endsOnQwBoundary &&
+                            payloadOffset + 4u <= totalBytes)
+                        {
+                            w = extend8(srcVec[3]);
+                        }
+
+                        decompressed[3] = w;
+                    }
+
                     // Unknown compressed format fallback: preserve legacy raw-copy behavior.
                     if (!handledFormat && decoded && !maskEnable && (vif1_regs.mode == 0u || vif1_regs.mode == 3u))
                     {
