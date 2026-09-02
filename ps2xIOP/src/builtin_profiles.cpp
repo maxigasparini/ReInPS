@@ -7,6 +7,7 @@ namespace ps2x::iop::detail
 {
     namespace
     {
+
         TsnddrvBindings recvxTsnddrvBindings()
         {
             return {
@@ -99,9 +100,11 @@ namespace ps2x::iop::detail
         ServiceList services;
         services.emplace_back(createMcservService(host));
         services.emplace_back(createDbcmanService(host));
-        services.emplace_back(createLibSdService(host));
+        services.emplace_back(createSnd989Service(host));
+	services.emplace_back(createLibSdService(host));
 	services.emplace_back(createIopHeapService(host));
-        return services;
+        services.emplace_back(createCdvdFsvService(host));
+	return services;
     }
 
     std::vector<ProfileDefinition> createBuiltinProfiles()
