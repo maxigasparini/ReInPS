@@ -639,6 +639,7 @@ void GSCpuBackend::DrawPrimitive(const GSPrimitiveBatch &batch)
 {
     const GSDrawState &state = batch.state;
     const auto &ctx = state.context;
+
     PS2_IF_AGRESSIVE_LOGS({
         const uint32_t primitiveIndex = s_debugPrimitiveCount.fetch_add(1u, std::memory_order_relaxed);
         if (primitiveIndex < 64u)
@@ -1124,13 +1125,13 @@ void GSCpuBackend::DrawSprite(const GSPrimitiveBatch &batch)
         const int texH = state.textureHeight;
 
         float u0f, v0f, u1f, v1f;
-        if (state.prim.fst)
-        {
-            u0f = static_cast<float>(v0.u >> 4);
-            v0f = static_cast<float>(v0.v >> 4);
-            u1f = static_cast<float>(v1.u >> 4);
-            v1f = static_cast<float>(v1.v >> 4);
-        }
+	if (state.prim.fst)
+	{
+	    u0f = static_cast<float>(v0.u >> 4);
+	    v0f = static_cast<float>(v0.v >> 4);
+	    u1f = static_cast<float>(v1.u >> 4);
+	    v1f = static_cast<float>(v1.v >> 4);
+	}
         else
         {
             const float q0 = fabsQ(v0.q);
@@ -1384,7 +1385,8 @@ void GSCpuBackend::BeginTransfer(const GSTransferCommand &command)
     m_transferState.copiedPixels = 0u;
     m_transferState.direction = command.direction;
     m_transferState.localToHostPendingBytes = 0u;
-
+    m_transferPendingByteCount = 0u;
+    
     if (command.direction == 2u)
         PerformLocalToLocalTransfer();
     else if (command.direction == 1u)
@@ -1440,18 +1442,72 @@ void GSCpuBackend::UploadImage(const uint8_t *data, uint32_t sizeBytes)
             break;
         }
         case GS_PSM_CT24:
-        case GS_PSM_Z24:
-        {
-            if (sizeBytes - offset < 3u)
-                return;
-            const uint32_t value = static_cast<uint32_t>(data[offset]) |
-                                   (static_cast<uint32_t>(data[offset + 1u]) << 8u) |
-                                   (static_cast<uint32_t>(data[offset + 2u]) << 16u);
-            WriteVramUnlocked(dpsm, dbp, dbw, m_transferState.x, m_transferState.y, value);
-            offset += 3u;
-            advancePixel(1u);
-            break;
-        }
+	case GS_PSM_Z24:
+	{
+	    if (m_transferPendingByteCount != 0u)
+	    {
+	        while (m_transferPendingByteCount < 3u &&
+	               offset < sizeBytes)
+	        {
+	            m_transferPendingBytes[m_transferPendingByteCount++] =
+	                data[offset++];
+	        }
+
+	        if (m_transferPendingByteCount < 3u)
+	        {
+	            return;
+	        }
+
+	        const uint32_t value =
+	            static_cast<uint32_t>(m_transferPendingBytes[0]) |
+	            (static_cast<uint32_t>(m_transferPendingBytes[1]) << 8u) |
+	            (static_cast<uint32_t>(m_transferPendingBytes[2]) << 16u);
+
+	        m_transferPendingByteCount = 0u;
+
+	        WriteVramUnlocked(
+	            dpsm,
+	            dbp,
+	            dbw,
+	            m_transferState.x,
+	            m_transferState.y,
+	            value);
+
+	        advancePixel(1u);
+	        break;
+	    }
+
+	    const uint32_t remaining = sizeBytes - offset;
+
+	    if (remaining < 3u)
+	    {
+	        while (offset < sizeBytes)
+	        {
+	            m_transferPendingBytes[m_transferPendingByteCount++] =
+	                data[offset++];
+	        }
+
+	        return;
+	    }
+
+	    const uint32_t value =
+	        static_cast<uint32_t>(data[offset]) |
+	        (static_cast<uint32_t>(data[offset + 1u]) << 8u) |
+	        (static_cast<uint32_t>(data[offset + 2u]) << 16u);
+
+	    offset += 3u;
+
+	    WriteVramUnlocked(
+	        dpsm,
+	        dbp,
+	        dbw,
+	        m_transferState.x,
+	        m_transferState.y,
+	        value);
+
+	    advancePixel(1u);
+	    break;
+	}
         case GS_PSM_CT16:
         case GS_PSM_CT16S:
         case GS_PSM_Z16:
@@ -1756,7 +1812,6 @@ bool GSCpuBackend::CopyFrameToHostRgba(const GSFrameReg &frame,
     }
     return true;
 }
-
 PresentationFrame GSCpuBackend::Present(const GSPresentationRequest &request)
 {
     // Snapshot local memory under the backend lock, then perform the expensive
@@ -1770,7 +1825,20 @@ PresentationFrame GSCpuBackend::Present(const GSPresentationRequest &request)
     snapshotBackend.Initialize(snapshot.data(), static_cast<uint32_t>(snapshot.size()));
     return snapshotBackend.PresentFromLocalMemory(request);
 }
+PresentationFrame GSCpuBackend::PresentSnapshot(
+    const GSPresentationRequest &request,
+    std::vector<uint8_t> &snapshot)
+{
+    if (snapshot.empty())
+        return {};
 
+    thread_local GSCpuBackend snapshotBackend;
+    snapshotBackend.Initialize(
+        snapshot.data(),
+        static_cast<uint32_t>(snapshot.size()));
+
+    return snapshotBackend.PresentFromLocalMemory(request);
+}
 PresentationFrame GSCpuBackend::PresentFromLocalMemory(const GSPresentationRequest &request)
 {
     PresentationFrame result{};

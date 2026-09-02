@@ -1477,10 +1477,13 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                             break;
                         }
 
-                        const bool compactVifLocalTag =
-                            (channelBase == 0x10009000u || channelBase == 0x10008000u) &&
-                            (id == 1u || id == 2u || id == 5u || id == 6u || id == 7u);
-                        if (compactVifLocalTag)
+                        const bool tteEnabled = (chcr & (1u << 6)) != 0u;
+
+			const bool compactVifLocalTag =
+			    tteEnabled &&
+			    (channelBase == 0x10009000u || channelBase == 0x10008000u) &&
+			    (id == 1u || id == 2u || id == 5u || id == 6u || id == 7u);
+			if (compactVifLocalTag)
                             appendCompactVif1TagData(currentTagAddr, 0u);
 
                         if (hasPayload)
@@ -1999,8 +2002,13 @@ bool PS2Memory::tryProcessNativeGifImageUploadChain(GS &gs, uint32_t tadr, uint3
         return false;
 
     const uint64_t imageTagLo = loadScalar<uint64_t>(imageGifTag, 0u, 16u, "native gif image tag", imageTagDmaAddr + 16u);
-    if (gifTagFlg(imageTagLo) != GIF_FMT_IMAGE)
-        return false;
+    const uint8_t flg = gifTagFlg(imageTagLo);
+
+	if (flg != GIF_FMT_IMAGE &&
+	    flg != GIF_FMT_IMAGE2)
+	{
+	    return false;
+	}
 
     const uint32_t imageQwc = gifTagNloop(imageTagLo);
     if (imageQwc == 0u)

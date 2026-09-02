@@ -388,8 +388,11 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
 
     const uint64_t currentTick = rt->eeScheduler().currentVSyncTick();
     const bool needsLatch = !s_hasLatchedInitialFrame || currentTick != s_lastPresentationTick;
+
     if (needsLatch)
-    {
+    {  
+	// The GS frame is latched synchronously by the scheduler at VBlankStart.
+        // Here the host only consumes that already-completed frame.
         rt->gs().latchHostPresentationFrame();
         s_lastPresentationTick = currentTick;
         s_hasLatchedInitialFrame = true;
@@ -619,6 +622,20 @@ bool PS2Runtime::syncCoreSubsystems()
     }
 
     m_gs.init(gsVram, static_cast<uint32_t>(PS2_GS_VRAM_SIZE), &m_memory.gs());
+    m_gs.setInterruptCallback(
+    [this]()
+    {
+        if (!m_eeScheduler)
+        {
+            return;
+        }
+
+        postEeEvent(
+            EeEvent{
+                EeEventType::Intc,
+                0u,
+                0u});
+    });
     m_gifArbiter.setProcessPacketFn([this](const uint8_t *data, uint32_t size)
                                     { m_gs.processGIFPacket(data, size); });
     m_memory.setGifArbiter(&m_gifArbiter);
@@ -1312,6 +1329,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                                      const char *debugName)
 {
     ctx->pc = targetPc;
+
     const bool isCall = (kind == GuestBranchKind::DirectCall || kind == GuestBranchKind::IndirectCall);
 
     // Every inter-function transfer is also a deterministic EE safe point.
@@ -1355,8 +1373,9 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
     }
 
     RecompiledFunction targetFn = lookupFunction(targetPc);
-    const uint32_t entryPc = ctx->pc;
-    targetFn(rdram, ctx, this);
+const uint32_t entryPc = ctx->pc;
+
+targetFn(rdram, ctx, this);
 
     if (isStopRequested() || ctx->pc == 0u)
     {

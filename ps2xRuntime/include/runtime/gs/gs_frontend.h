@@ -10,6 +10,8 @@
 
 #include "runtime/gs/gs_backend.h"
 
+#include <functional>
+
 struct GSDebugSnapshot
 {
     GSContext ctx[2]{};
@@ -106,6 +108,13 @@ public:
     void reset();
     void setRasterBackend(std::unique_ptr<GSRasterBackend> backend);
 
+	using InterruptCallback = std::function<void()>;
+
+	void setInterruptCallback(InterruptCallback callback)
+	{
+	    m_interruptCallback = std::move(callback);
+	}
+
     void processGIFPacket(const uint8_t *data, uint32_t sizeBytes);
     bool processNativePackedGIFPacket(const uint8_t *data, uint32_t sizeBytes);
     void uploadImageNative(uint64_t bitbltbuf,
@@ -130,6 +139,7 @@ public:
     void setDebugHistoryPaused(bool paused);
     bool getPreferredDisplaySource(GSFrameReg &outSource, uint32_t &outDestFbp) const;
     void latchHostPresentationFrame();
+    void captureHostPresentationSnapshot();
     bool copyLatchedHostPresentationFrame(std::vector<uint8_t> &outPixels,
                                           uint32_t &outWidth,
                                           uint32_t &outHeight,
@@ -149,6 +159,8 @@ public:
     uint32_t ReadVram(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y) const;
 
 private:
+    InterruptCallback m_interruptCallback;
+
     void snapshotVRAM();
     void writeRegisterUnlocked(uint8_t regAddr, uint64_t value);
     void writeRegisterPacked(uint8_t regDesc, uint64_t lo, uint64_t hi);
@@ -183,6 +195,7 @@ private:
     mutable std::recursive_mutex m_stateMutex;
     mutable std::mutex m_backendLifetimeMutex;
     mutable std::mutex m_presentationMutex;
+    mutable std::mutex m_presentationSnapshotMutex;
 
     GSContext m_ctx[2];
     GSPrimReg m_prim{};
@@ -223,6 +236,10 @@ private:
     uint32_t m_preferredDisplayDestFbp = 0;
     bool m_hasPreferredDisplaySource = false;
     std::vector<uint8_t> m_hostPresentationFrame;
+    std::vector<uint8_t> m_pendingPresentationSnapshot;
+    GSPresentationRequest m_pendingPresentationRequest{};
+    bool m_hasPendingPresentationSnapshot = false;
+
     uint32_t m_hostPresentationWidth = 0;
     uint32_t m_hostPresentationHeight = 0;
     uint32_t m_hostPresentationDisplayFbp = 0;

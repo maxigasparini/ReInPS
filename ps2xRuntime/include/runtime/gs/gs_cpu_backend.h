@@ -24,6 +24,10 @@ public:
     void Sync(GSSyncReason reason) override;
     PresentationFrame Present(const GSPresentationRequest &request) override;
 
+    PresentationFrame PresentSnapshot(
+    	const GSPresentationRequest &request,
+    	std::vector<uint8_t> &snapshot) override;
+
     bool ClearFramebuffer(const GSContext &context, uint32_t rgba) override;
     uint32_t ConsumeLocalToHostBytes(uint8_t *dst, uint32_t maxBytes) override;
 
@@ -70,6 +74,11 @@ private:
 
     GSTransferCommand m_transfer{};
     GSTransferSnapshot m_transferState{};
+
+    std::array<uint8_t, 3> m_transferPendingBytes{};
+    uint32_t m_transferPendingByteCount = 0u;
+
     std::vector<uint8_t> m_localToHostBuffer;
+
     size_t m_localToHostReadPos = 0;
 };

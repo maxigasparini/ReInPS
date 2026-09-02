@@ -525,30 +525,70 @@ GSPresentationRequest GS::buildPresentationRequestUnlocked() const
     return request;
 }
 
-void GS::latchHostPresentationFrame()
+void GS::captureHostPresentationSnapshot()
 {
     GSPresentationRequest request{};
+
     {
         std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+
         if (!m_backend || !m_privRegs)
-        {
-            std::lock_guard<std::mutex> presentationLock(m_presentationMutex);
-            m_hostPresentationFrame.clear();
-            m_hasHostPresentationFrame = false;
-            m_hostPresentationWidth = m_hostPresentationHeight = 0u;
             return;
-        }
+
         request = buildPresentationRequestUnlocked();
     }
 
-    PresentationFrame frame{};
+    std::vector<uint8_t> snapshot;
+
     {
         std::lock_guard<std::mutex> backendLock(m_backendLifetimeMutex);
+
+        if (!m_backend)
+            return;
+
+        m_backend->Flush();
+        m_backend->Sync(GSSyncReason::Presentation);
+        m_backend->SnapshotVram(snapshot);
+    }
+
+    if (snapshot.empty())
+        return;
+
+    {
+        std::lock_guard<std::mutex> lock(m_presentationSnapshotMutex);
+
+        m_pendingPresentationRequest = request;
+        m_pendingPresentationSnapshot = std::move(snapshot);
+        m_hasPendingPresentationSnapshot = true;
+    }
+}
+void GS::latchHostPresentationFrame()
+{
+    GSPresentationRequest request{};
+    std::vector<uint8_t> snapshot;
+
+    {
+        std::lock_guard<std::mutex> lock(m_presentationSnapshotMutex);
+
+        if (!m_hasPendingPresentationSnapshot ||
+            m_pendingPresentationSnapshot.empty())
+        {
+            return;
+        }
+
+        request = m_pendingPresentationRequest;
+        snapshot = std::move(m_pendingPresentationSnapshot);
+        m_hasPendingPresentationSnapshot = false;
+    }
+
+    PresentationFrame frame{};
+
+    {
+        std::lock_guard<std::mutex> backendLock(m_backendLifetimeMutex);
+
         if (m_backend)
         {
-            m_backend->Flush();
-            m_backend->Sync(GSSyncReason::Presentation);
-            frame = m_backend->Present(request);
+            frame = m_backend->PresentSnapshot(request, snapshot);
         }
     }
 
@@ -558,8 +598,10 @@ void GS::latchHostPresentationFrame()
     const uint32_t width = frame.width;
     const uint32_t height = frame.height;
     const bool usedPreferred = frame.usedPreferred;
+
     {
         std::lock_guard<std::mutex> presentationLock(m_presentationMutex);
+
         m_hostPresentationFrame = std::move(frame.pixels);
         m_hostPresentationWidth = width;
         m_hostPresentationHeight = height;
@@ -572,10 +614,15 @@ void GS::latchHostPresentationFrame()
     if (hasFrame)
     {
         std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
-        recordPresentDebugEventUnlocked(displayFbp, sourceFbp, width, height, usedPreferred);
+
+        recordPresentDebugEventUnlocked(
+            displayFbp,
+            sourceFbp,
+            width,
+            height,
+            usedPreferred);
     }
 }
-
 bool GS::copyLatchedHostPresentationFrame(std::vector<uint8_t> &outPixels,
                                           uint32_t &outWidth,
                                           uint32_t &outHeight,
@@ -746,7 +793,7 @@ void GS::processGIFPacket(const uint8_t *data, uint32_t sizeBytes)
             if ((nloop * nreg) & 1)
                 offset += 8;
         }
-        else if (flg == GIF_FMT_IMAGE)
+        else if (flg == GIF_FMT_IMAGE  || flg == GIF_FMT_IMAGE2)
         {
             const uint32_t imageBytes = nloop * 16u;
             const uint32_t availableBytes = sizeBytes - offset;
@@ -894,9 +941,12 @@ bool GS::tryProcessNativeImageUploadPacket(const uint8_t *data, uint32_t sizeByt
     const uint64_t imageTagLo = loadLE64(data + offset);
     const uint8_t imageFlg = static_cast<uint8_t>((imageTagLo >> 58u) & 0x3u);
     const uint32_t imageNloop = static_cast<uint32_t>(imageTagLo & 0x7FFFu);
-    if (imageFlg != GIF_FMT_IMAGE || imageNloop == 0u)
-        return false;
-
+    if ((imageFlg != GIF_FMT_IMAGE &&
+     imageFlg != GIF_FMT_IMAGE2) ||
+    imageNloop == 0u)
+{
+    return false;
+}
     offset += 16u;
     const uint64_t imageBytes64 = static_cast<uint64_t>(imageNloop) * 16ull;
     if (imageBytes64 > 0xFFFFFFFFull)
@@ -1494,29 +1544,69 @@ void GS::writeRegisterUnlocked(uint8_t regAddr, uint64_t value)
         break;
     }
     case GS_REG_SIGNAL:
-    {
-        if (m_privRegs)
-        {
-            uint32_t id = static_cast<uint32_t>(value & 0xFFFFFFFF);
-            uint32_t mask = static_cast<uint32_t>(value >> 32);
-            uint32_t lo = static_cast<uint32_t>(m_privRegs->siglblid & 0xFFFFFFFF);
-            lo = (lo & ~mask) | (id & mask);
-            m_privRegs->siglblid = (m_privRegs->siglblid & 0xFFFFFFFF00000000ULL) | lo;
-            m_privRegs->csr.fetch_or(0x1);
-        }
-        break;
-    }
-    case GS_REG_FINISH:
-    {
-        if (m_backend)
-        {
-            m_backend->Flush();
-            m_backend->Sync(GSSyncReason::Finish);
-        }
-        if (m_privRegs)
-            m_privRegs->csr.fetch_or(0x2);
-        break;
-    }
+	{
+	    if (m_privRegs)
+	    {
+	        uint32_t id =
+	            static_cast<uint32_t>(value & 0xFFFFFFFF);
+
+	        uint32_t mask =
+	            static_cast<uint32_t>(value >> 32);
+
+	        uint32_t lo =
+	            static_cast<uint32_t>(
+	                m_privRegs->siglblid & 0xFFFFFFFF);
+
+	        lo = (lo & ~mask) | (id & mask);
+
+	        m_privRegs->siglblid =
+	            (m_privRegs->siglblid &
+	             0xFFFFFFFF00000000ULL) |
+	            lo;
+
+	        // CSR.SIGNAL
+	        m_privRegs->csr.fetch_or(0x1);
+
+	        // GS IMR bit 8 masks SIGNAL when set.
+	        constexpr uint64_t kSignalMask =
+	            1ull << 8;
+
+	        if ((m_privRegs->imr & kSignalMask) == 0 &&
+	            m_interruptCallback)
+	        {
+	            m_interruptCallback();
+	        }
+	    }
+
+	    break;
+	}
+
+	case GS_REG_FINISH:
+	{
+	    if (m_backend)
+	    {
+	        m_backend->Flush();
+	        m_backend->Sync(GSSyncReason::Finish);
+	    }
+
+	    if (m_privRegs)
+	    {
+	        // CSR.FINISH
+	        m_privRegs->csr.fetch_or(0x2);
+
+	        // GS IMR bit 9 masks FINISH when set.
+	        constexpr uint64_t kFinishMask =
+	            1ull << 9;
+
+	        if ((m_privRegs->imr & kFinishMask) == 0 &&
+	            m_interruptCallback)
+	        {
+	            m_interruptCallback();
+	        }
+	    }
+
+	    break;
+	}
     case GS_REG_LABEL:
     {
         if (m_privRegs)

@@ -229,6 +229,7 @@ enum class EeEventType : uint8_t
     VBlankStart,
     VBlankEnd,
     Dmac,
+    Intc,
     ExternalWake,
     Alarm,
 };

@@ -289,13 +289,13 @@ void EeScheduler::run()
         {
             continue;
         }
-
         try
         {
-            m_insideInterrupt = !running->invocations.empty() && running->invocations.back().kind == GuestInvocationKind::Interrupt;
+	   m_insideInterrupt = !running->invocations.empty() && running->invocations.back().kind == GuestInvocationKind::Interrupt;
             m_guestExecuting.store(true, std::memory_order_release);
             function(m_rdram, &context, &m_runtime);
-            m_guestExecuting.store(false, std::memory_order_release);
+
+	     m_guestExecuting.store(false, std::memory_order_release);
             m_insideInterrupt = false;
         }
         catch (const EeDispatcherTransfer &)
@@ -312,7 +312,8 @@ void EeScheduler::run()
         }
 
         processPendingEvents();
-        if (m_rescheduleRequested && m_currentThreadId != 0)
+	
+	if (m_rescheduleRequested && m_currentThreadId != 0)
         {
             GuestThread *preempted = currentThread();
             assert(preempted != nullptr);
@@ -442,6 +443,7 @@ int EeScheduler::createThread(const EeThreadCreateParams &params)
     thread.initialPriority = params.priority;
     thread.currentPriority = params.priority;
     thread.status = EeThreadStatus::Dormant;
+
     m_threads.emplace(id, std::move(thread));
     publishSnapshot();
     return id;
@@ -499,6 +501,7 @@ int EeScheduler::startThread(int id, uint32_t arg, const R5900Context &caller, b
                                   : getRegU32(&caller, 29);
     SET_GPR_U32(&target->context, 29, stackTop);
     SET_GPR_U32(&target->context, 31, 0u);
+
     enqueueReady(*target);
     requestPreemptionIfHigher(*target, interruptSafe);
     publishSnapshot();
@@ -712,6 +715,7 @@ int EeScheduler::changePriority(int id, int priority, bool interruptSafe, int &o
         return KE_UNKNOWN_THID;
     }
     oldPriority = target->currentPriority;
+
     if (target->status == EeThreadStatus::Ready)
     {
         removeReady(*target);
@@ -836,6 +840,7 @@ int EeScheduler::createSemaphore(int initCount, int maxCount, uint32_t attr, uin
     semaphore.option = option;
     m_semaphores.emplace(id, std::move(semaphore));
     publishSnapshot();
+
     return id;
 }
 
@@ -868,13 +873,15 @@ int EeScheduler::signalSemaphore(int id, bool interruptSafe)
     {
         return KE_UNKNOWN_SEMID;
     }
+
     if (!object->waiters.empty())
     {
         const int waiterId = object->waiters.front();
         object->waiters.pop_front();
         GuestThread *waiter = thread(waiterId);
         assert(waiter != nullptr);
-        makeReady(*waiter, id, interruptSafe);
+
+	makeReady(*waiter, id, interruptSafe);
         publishSnapshot();
         return id;
     }
@@ -915,6 +922,7 @@ void EeScheduler::waitSemaphore(int id)
         setReturnS32(&self->activeContext(), KE_UNKNOWN_SEMID);
         return;
     }
+    
     if (object->count != 0)
     {
         --object->count;
@@ -927,6 +935,7 @@ void EeScheduler::waitSemaphore(int id)
     GuestThread *self = currentThread();
     assert(self != nullptr);
     object->waiters.push_back(self->id);
+
     blockCurrent(EeWaitState{EeWaitReason::Semaphore, EeSemaphoreWait{id}});
 }
 
@@ -1204,6 +1213,7 @@ int EeScheduler::addIrqHandler(bool dmac,
                                   sp,
                                   true,
                                   append ? ++tail : --head});
+  
     return id;
 }
 
@@ -1259,7 +1269,8 @@ void EeScheduler::dispatchIrq(bool dmac, uint32_t cause)
     }
     const auto &handlers = dmac ? m_dmacHandlers : m_intcHandlers;
     std::vector<EeIrqHandler> matching;
-    for (const auto &[id, handler] : handlers)
+    
+	for (const auto &[id, handler] : handlers)
     {
         (void)id;
         if (handler.enabled && handler.cause == cause && handler.handler != 0u &&
@@ -1268,6 +1279,7 @@ void EeScheduler::dispatchIrq(bool dmac, uint32_t cause)
             matching.push_back(handler);
         }
     }
+
     std::sort(matching.begin(), matching.end(), [](const EeIrqHandler &left, const EeIrqHandler &right)
               { return left.order < right.order; });
     for (const EeIrqHandler &handler : matching)
@@ -1278,8 +1290,11 @@ void EeScheduler::dispatchIrq(bool dmac, uint32_t cause)
         SET_GPR_U32(&invocation.context, 4, cause);
         SET_GPR_U32(&invocation.context, 5, handler.argument);
         SET_GPR_U32(&invocation.context, 28, handler.gp);
-        SET_GPR_U32(&invocation.context, 29, handler.sp);
-        SET_GPR_U32(&invocation.context, 31, 0u);
+       
+	// TEMP bring-up: use the dedicated async invocation stack for IRQ handlers.
+	SET_GPR_U32(&invocation.context, 29, 0u);
+
+	 SET_GPR_U32(&invocation.context, 31, 0u);
         queueInvocation(std::move(invocation));
     }
 }
@@ -1869,6 +1884,10 @@ void EeScheduler::processEvent(const EeEvent &event)
         {
             m_runtime.memory().gs().csr.fetch_and(~0x2000ull, std::memory_order_acq_rel);
         }
+	    // Latch the completed GS frame exactly at VBlank before waking
+        // guest threads/callbacks that can start modifying the next frame.
+        m_runtime.gs().captureHostPresentationSnapshot();
+
         writeGuestU32(m_vsyncFlagAddress, 1u);
         if (m_vsyncTickAddress != 0u)
         {
@@ -1901,6 +1920,9 @@ void EeScheduler::processEvent(const EeEvent &event)
         dispatchIrq(false, 3u);
         break;
     case EeEventType::Dmac:
+        break;
+    case EeEventType::Intc:
+        dispatchIrq(false, event.id);
         break;
     case EeEventType::Alarm:
     {
