@@ -2292,7 +2292,8 @@ namespace ps2_stubs
         {
             std::unique_lock<std::mutex> lock(g_mpeg_stub_mutex);
             MpegPlaybackState &playback = getPlaybackState(mpegAddr);
-            if (playback.decodedFrames.empty() &&
+
+	if (playback.decodedFrames.empty() &&
                 !g_mpeg_stub_state.currentCdStreamEofSeen &&
                 !playback.streamEnded &&
                 !playback.decoderFailed)
@@ -2341,21 +2342,24 @@ namespace ps2_stubs
                     playback.nextPictureTickQ32 = currentTickQ32;
                 }
 
+                                 // TEMP MPEG DIAGNOSTIC:
+                // Do not pace frame delivery inside sceMpegGetPicture.
+                //
+                // The guest already performs its own GS/vblank synchronization
+                // around CMpeg::Update. Blocking the EE caller here can allow
+                // the helper thread to complete its state=2 -> state=0 cycle
+                // before CMpeg::Update reaches the post-picture demux loop.
+                //
+                // Keep the presentation calculations intact. This experiment
+                // changes only the scheduler yield.
                 if (currentTickQ32 < presentationTargetQ32)
                 {
-                    const uint64_t eligibleTick = (presentationTargetQ32 + kPictureClockOne - 1u) >> 32u;
-                    lock.unlock();
-                    runtime->eeScheduler().waitVSync(
-                        eligibleTick - 1u,
-                        -1,
-                        [rdram, runtime](R5900Context &resumeContext)
-                        {
-                            if (static_cast<int32_t>(getRegU32(&resumeContext, 2)) < 0)
-                            {
-                                return;
-                            }
-                            sceMpegGetPicture(rdram, &resumeContext, runtime);
-                        });
+                    static std::atomic<uint32_t> s_pacingBypassTraceCount{0u};
+
+                    const uint32_t traceIndex =
+                        s_pacingBypassTraceCount.fetch_add(
+                            1u,
+                            std::memory_order_relaxed);
                 }
 
                 frame = std::move(playback.decodedFrames.front());
@@ -2446,49 +2450,65 @@ namespace ps2_stubs
         g_mpeg_stub_state.currentCdStreamEofSeen = currentCdStreamEofSeen;
         setReturnU32(ctx, 0u);
     }
-
-    void sceMpegIsEnd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        void sceMpegIsEnd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         (void)rdram;
+
         const uint32_t mpegAddr = getRegU32(ctx, 4);
 
         std::lock_guard<std::mutex> lock(g_mpeg_stub_mutex);
+
         g_mpeg_stub_state.initialized = true;
+
         MpegPlaybackState &playback = getPlaybackState(mpegAddr);
-        // Only the producer/demux EOF is authoritative. A sequence_end_code can
-        // be observed while more PSS data is still buffered, and a decoder
-        // failure before producer EOF may still recover on a later sequence.
+
+        /*
+         * A CD-stream producer is only authoritative when this playback
+         * actually belongs to an active tracked CD-stream generation.
+         *
+         * Titles can also feed sceMpeg through the guest demux path
+         * (sceMpegDemuxPss / sceMpegDemuxPssRing) without ever calling
+         * sceCdStStart. In that case cdStreamGeneration remains zero and
+         * waiting for currentCdStreamEofSeen would make sceMpegIsEnd stay
+         * false forever after the decoder has already reached sequence end.
+         */
+        const bool producerTrackingActive =
+            g_mpeg_stub_state.cdStreamGeneration != 0u &&
+            playback.cdStreamGeneration ==
+                g_mpeg_stub_state.cdStreamGeneration;
+
         const bool producerEnded =
-            g_mpeg_stub_state.currentCdStreamEofSeen &&
-            playback.cdStreamGeneration == g_mpeg_stub_state.cdStreamGeneration;
-        const bool ended = producerEnded &&
-                           (playback.streamEnded || (playback.decoderFailed && playback.sawInput));
-        const uint64_t presentationEnd = playback.presentationEndTickQ32;
-        const uint64_t currentTickQ32 = runtime != nullptr
-                                            ? (runtime->eeScheduler().currentVSyncTick() << 32u)
-                                            : std::numeric_limits<uint64_t>::max();
+            !producerTrackingActive ||
+            g_mpeg_stub_state.currentCdStreamEofSeen;
+
+        const bool decoderEnded =
+            playback.streamEnded ||
+            (playback.decoderFailed && playback.sawInput);
+
+        const bool ended =
+            producerEnded && decoderEnded;
+
+        const uint64_t presentationEnd =
+            playback.presentationEndTickQ32;
+
+        const uint64_t currentTickQ32 =
+            runtime != nullptr
+                ? (runtime->eeScheduler().currentVSyncTick() << 32u)
+                : std::numeric_limits<uint64_t>::max();
+
         const bool presentationComplete =
-            presentationEnd == std::numeric_limits<uint64_t>::max() ||
+            presentationEnd ==
+                std::numeric_limits<uint64_t>::max() ||
             currentTickQ32 >= presentationEnd;
 
-        if (g_mpeg_stub_state.isEndTraceCount < 16u)
-        {
-            PS2_IF_AGRESSIVE_LOGS({
-                std::cerr << "[MPEG:IsEnd] mpeg=0x" << std::hex << mpegAddr << std::dec
-                          << " ended=" << ended
-                          << " producerEof=" << producerEnded
-                          << " seqEnd=" << playback.sawSequenceEnd
-                          << " streamEnded=" << playback.streamEnded
-                          << " presentationComplete=" << presentationComplete
-                          << " frames=" << playback.decodedFrames.size()
-                          << " sawInput=" << playback.sawInput << std::endl;
-            });
-            ++g_mpeg_stub_state.isEndTraceCount;
-        }
-
-        setReturnS32(ctx, (ended && playback.decodedFrames.empty() && presentationComplete) ? 1 : 0);
+        setReturnS32(
+            ctx,
+            ended &&
+                    playback.decodedFrames.empty() &&
+                    presentationComplete
+                ? 1
+                : 0);
     }
-
     void sceMpegIsRefBuffEmpty(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         (void)rdram;
