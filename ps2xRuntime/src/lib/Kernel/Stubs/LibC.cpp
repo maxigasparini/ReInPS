@@ -1082,7 +1082,7 @@ namespace ps2_stubs
 
     void rand(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        setReturnS32(ctx, std::rand() & 0x7FFF);
+        setReturnS32(ctx, std::rand());
     }
 
     void srand(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
