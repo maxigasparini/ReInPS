@@ -554,6 +554,128 @@ void register_ps2_memory_tests()
                 "V3-32 W should come from the following source word");
         });
 
+        tc.Run("VIF UNPACK V4-5 expands packed components", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            std::memset(mem.getVU1Data(), 0, PS2_VU1_DATA_SIZE);
+
+            std::vector<uint8_t> packet;
+
+            appendU32(
+                packet,
+                makeVifCmd(
+                    0x01u,
+                    0u,
+                    static_cast<uint16_t>((1u << 8) | 1u))); // STCYCL: WL=1, CL=1
+
+            appendU32(
+                packet,
+                makeVifCmd(0x6Fu, 1u, 0u)); // UNPACK V4-5, NUM=1, ADDR=0
+
+            // X=1, Y=2, Z=3, W=1.
+            const uint16_t packed =
+                static_cast<uint16_t>(
+                    1u |
+                    (2u << 5) |
+                    (3u << 10) |
+                    (1u << 15));
+
+            packet.push_back(static_cast<uint8_t>(packed & 0xFFu));
+            packet.push_back(static_cast<uint8_t>((packed >> 8) & 0xFFu));
+
+            // UNPACK payload is padded to a 32-bit boundary.
+            packet.push_back(0u);
+            packet.push_back(0u);
+
+            mem.processVIF1Data(
+                packet.data(),
+                static_cast<uint32_t>(packet.size()));
+
+            const uint8_t *vu = mem.getVU1Data();
+
+            uint32_t x = 0u;
+            uint32_t y = 0u;
+            uint32_t z = 0u;
+            uint32_t w = 0u;
+
+            std::memcpy(&x, vu + 0u, 4u);
+            std::memcpy(&y, vu + 4u, 4u);
+            std::memcpy(&z, vu + 8u, 4u);
+            std::memcpy(&w, vu + 12u, 4u);
+
+            t.Equals(x, 8u, "V4-5 X should expand 5 bits to 8 bits");
+            t.Equals(y, 16u, "V4-5 Y should expand 5 bits to 8 bits");
+            t.Equals(z, 24u, "V4-5 Z should expand 5 bits to 8 bits");
+            t.Equals(w, 128u, "V4-5 W should expand 1 bit to bit 7");
+        });
+
+        tc.Run("VIF UNPACK V4-5 ignores STMOD", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            std::memset(mem.getVU1Data(), 0, PS2_VU1_DATA_SIZE);
+
+            std::vector<uint8_t> packet;
+
+            appendU32(
+                packet,
+                makeVifCmd(
+                    0x01u,
+                    0u,
+                    static_cast<uint16_t>((1u << 8) | 1u))); // STCYCL: WL=1, CL=1
+
+            appendU32(packet, makeVifCmd(0x30u, 0u, 0u)); // STROW
+            appendU32(packet, 100u);
+            appendU32(packet, 100u);
+            appendU32(packet, 100u);
+            appendU32(packet, 100u);
+
+            appendU32(
+                packet,
+                makeVifCmd(0x05u, 0u, 1u)); // STMOD offset mode
+
+            appendU32(
+                packet,
+                makeVifCmd(0x6Fu, 1u, 0u)); // UNPACK V4-5, NUM=1, ADDR=0
+
+            // X=1, Y=2, Z=3, W=1.
+            const uint16_t packed =
+                static_cast<uint16_t>(
+                    1u |
+                    (2u << 5) |
+                    (3u << 10) |
+                    (1u << 15));
+
+            packet.push_back(static_cast<uint8_t>(packed & 0xFFu));
+            packet.push_back(static_cast<uint8_t>((packed >> 8) & 0xFFu));
+
+            // UNPACK payload is padded to a 32-bit boundary.
+            packet.push_back(0u);
+            packet.push_back(0u);
+
+            mem.processVIF1Data(
+                packet.data(),
+                static_cast<uint32_t>(packet.size()));
+
+            const uint8_t *vu = mem.getVU1Data();
+
+            uint32_t x = 0u;
+            uint32_t y = 0u;
+            uint32_t z = 0u;
+            uint32_t w = 0u;
+
+            std::memcpy(&x, vu + 0u, 4u);
+            std::memcpy(&y, vu + 4u, 4u);
+            std::memcpy(&z, vu + 8u, 4u);
+            std::memcpy(&w, vu + 12u, 4u);
+
+            t.Equals(x, 8u, "V4-5 should ignore STMOD for X");
+            t.Equals(y, 16u, "V4-5 should ignore STMOD for Y");
+            t.Equals(z, 24u, "V4-5 should ignore STMOD for Z");
+            t.Equals(w, 128u, "V4-5 should ignore STMOD for W");
+        });
+
         tc.Run("VIF control commands update MARK MASK ROW and COL registers", [](TestCase &t)
         {
             PS2Memory mem;
