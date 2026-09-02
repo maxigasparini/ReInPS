@@ -179,6 +179,21 @@ int main(int argc, char *argv[])
         std::string elfName = pathObj.filename().string();
         std::string normalizedId = normalizeGameId(elfName);
 
+	PS2Runtime::IoPaths ioPaths{};
+	ioPaths.elfPath = pathObj;
+
+	if (argc >= 3 && argv[2] && argv[2][0] != '\0')
+	{
+	    ioPaths.cdImage = std::filesystem::path(argv[2]);
+
+	    std::cout
+	        << "Using CD image: "
+	        << ioPaths.cdImage
+	        << std::endl;
+	}
+
+	PS2Runtime::setIoPaths(ioPaths);
+
         std::string windowTitle = "PS2-Recomp | ";
         const char *gameName = getGameName(normalizedId);
 
