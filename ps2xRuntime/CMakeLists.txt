@@ -497,6 +497,11 @@ endif()
 
 if(MSVC)
     target_compile_options(ps2EntryRunner PRIVATE /FS)
+elseif(
+    CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang"
+    AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|i.86"
+)
+    target_compile_options(ps2EntryRunner PRIVATE -msse4.1)
 endif()
 
 target_include_directories(ps2_runtime PUBLIC
