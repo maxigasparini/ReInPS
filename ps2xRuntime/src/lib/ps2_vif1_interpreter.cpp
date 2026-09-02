@@ -687,6 +687,12 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                         handledFormat = false;
                     }
 
+                    if (handledFormat && decoded && components == 2)
+                    {
+                        decompressed[2] = decompressed[0];
+                        decompressed[3] = decompressed[1];
+                    }
+
                     // Unknown compressed format fallback: preserve legacy raw-copy behavior.
                     if (!handledFormat && decoded && !maskEnable && (vif1_regs.mode == 0u || vif1_regs.mode == 3u))
                     {

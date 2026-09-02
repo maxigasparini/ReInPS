@@ -417,8 +417,17 @@ void register_ps2_memory_tests()
 
             // UNPACK V4_32: opcode 0x6C (vn=3, vl=0), num=0 => 256 vectors, 16 bytes each.
             std::vector<uint8_t> packet;
-            packet.reserve(4u + 4096u);
+            packet.reserve(8u + 4096u);
+
+            appendU32(
+                packet,
+                makeVifCmd(
+                    0x01u,
+                    0u,
+                    static_cast<uint16_t>((1u << 8) | 1u))); // STCYCL: WL=1, CL=1
+
             appendU32(packet, makeVifCmd(0x6Cu, 0u, 0u));
+
             for (uint32_t i = 0; i < 4096u; ++i)
             {
                 packet.push_back(static_cast<uint8_t>((i * 3u) & 0xFFu));
@@ -437,7 +446,55 @@ void register_ps2_memory_tests()
                     break;
                 }
             }
+
             t.IsTrue(matches, "UNPACK num=0 should copy 256 V4_32 vectors (4096 bytes)");
+        });
+
+        tc.Run("VIF UNPACK V2-32 replicates XY into ZW", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            std::memset(mem.getVU1Data(), 0, PS2_VU1_DATA_SIZE);
+
+            uint32_t oldZ = 0xAAAAAAAAu;
+            uint32_t oldW = 0xBBBBBBBBu;
+            std::memcpy(mem.getVU1Data() + 8u, &oldZ, 4u);
+            std::memcpy(mem.getVU1Data() + 12u, &oldW, 4u);
+
+            std::vector<uint8_t> packet;
+
+            appendU32(
+                packet,
+                makeVifCmd(
+                    0x01u,
+                    0u,
+                    static_cast<uint16_t>((1u << 8) | 1u))); // STCYCL: WL=1, CL=1
+
+            appendU32(packet, makeVifCmd(0x64u, 1u, 0u)); // UNPACK V2-32, NUM=1, ADDR=0
+
+            appendU32(packet, 0x11111111u);
+            appendU32(packet, 0x22222222u);
+
+            mem.processVIF1Data(
+                packet.data(),
+                static_cast<uint32_t>(packet.size()));
+
+            const uint8_t *vu = mem.getVU1Data();
+
+            uint32_t x = 0u;
+            uint32_t y = 0u;
+            uint32_t z = 0u;
+            uint32_t w = 0u;
+
+            std::memcpy(&x, vu + 0u, 4u);
+            std::memcpy(&y, vu + 4u, 4u);
+            std::memcpy(&z, vu + 8u, 4u);
+            std::memcpy(&w, vu + 12u, 4u);
+
+            t.Equals(x, 0x11111111u, "V2-32 X should come from source X");
+            t.Equals(y, 0x22222222u, "V2-32 Y should come from source Y");
+            t.Equals(z, 0x11111111u, "V2-32 Z should replicate source X");
+            t.Equals(w, 0x22222222u, "V2-32 W should replicate source Y");
         });
 
         tc.Run("VIF control commands update MARK MASK ROW and COL registers", [](TestCase &t)
