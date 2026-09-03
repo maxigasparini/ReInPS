@@ -1212,6 +1212,166 @@ void register_ps2_memory_tests()
             t.Equals(w, 0x000000FEu, "V3-8 unsigned W");
         });
 
+        tc.Run("VIF UNPACK S-32 replicates the scalar to XYZW", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            std::memset(mem.getVU1Data(), 0, PS2_VU1_DATA_SIZE);
+
+            std::vector<uint8_t> packet;
+
+            appendU32(
+                packet,
+                makeVifCmd(
+                    0x01u,
+                    0u,
+                    static_cast<uint16_t>((1u << 8) | 1u))); // STCYCL 1:1
+
+            appendU32(packet, makeVifCmd(0x60u, 1u, 0u)); // UNPACK S-32
+            appendU32(packet, 0x89ABCDEFu);
+
+            mem.processVIF1Data(
+                packet.data(),
+                static_cast<uint32_t>(packet.size()));
+
+            const uint8_t *vu = mem.getVU1Data();
+
+            uint32_t x = 0, y = 0, z = 0, w = 0;
+            std::memcpy(&x, vu + 0u, 4u);
+            std::memcpy(&y, vu + 4u, 4u);
+            std::memcpy(&z, vu + 8u, 4u);
+            std::memcpy(&w, vu + 12u, 4u);
+
+            t.Equals(x, 0x89ABCDEFu, "S-32 X");
+            t.Equals(y, 0x89ABCDEFu, "S-32 Y");
+            t.Equals(z, 0x89ABCDEFu, "S-32 Z");
+            t.Equals(w, 0x89ABCDEFu, "S-32 W");
+        });
+
+        tc.Run("VIF UNPACK S-16 replicates the extended scalar to XYZW", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            std::memset(mem.getVU1Data(), 0, PS2_VU1_DATA_SIZE);
+
+            std::vector<uint8_t> packet;
+
+            appendU32(
+                packet,
+                makeVifCmd(
+                    0x01u,
+                    0u,
+                    static_cast<uint16_t>((1u << 8) | 1u))); // STCYCL 1:1
+
+            appendU32(
+                packet,
+                makeVifCmd(0x61u, 1u, 0x4000u)); // UNPACK S-16, USN=1
+
+            packet.push_back(0x01u);
+            packet.push_back(0x80u); // 0x8001
+
+            // 2-byte payload rounded to 4 bytes.
+            packet.push_back(0u);
+            packet.push_back(0u);
+
+            mem.processVIF1Data(
+                packet.data(),
+                static_cast<uint32_t>(packet.size()));
+
+            const uint8_t *vu = mem.getVU1Data();
+
+            uint32_t x = 0, y = 0, z = 0, w = 0;
+            std::memcpy(&x, vu + 0u, 4u);
+            std::memcpy(&y, vu + 4u, 4u);
+            std::memcpy(&z, vu + 8u, 4u);
+            std::memcpy(&w, vu + 12u, 4u);
+
+            t.Equals(x, 0x00008001u, "S-16 X");
+            t.Equals(y, 0x00008001u, "S-16 Y");
+            t.Equals(z, 0x00008001u, "S-16 Z");
+            t.Equals(w, 0x00008001u, "S-16 W");
+        });
+
+        tc.Run("VIF UNPACK V4-32 writes all four source lanes", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            std::memset(mem.getVU1Data(), 0, PS2_VU1_DATA_SIZE);
+
+            std::vector<uint8_t> packet;
+
+            appendU32(
+                packet,
+                makeVifCmd(
+                    0x01u,
+                    0u,
+                    static_cast<uint16_t>((1u << 8) | 1u))); // STCYCL 1:1
+
+            appendU32(packet, makeVifCmd(0x6Cu, 1u, 0u)); // UNPACK V4-32
+
+            appendU32(packet, 0x11111111u);
+            appendU32(packet, 0x22222222u);
+            appendU32(packet, 0x33333333u);
+            appendU32(packet, 0x44444444u);
+
+            mem.processVIF1Data(
+                packet.data(),
+                static_cast<uint32_t>(packet.size()));
+
+            const uint8_t *vu = mem.getVU1Data();
+
+            uint32_t x = 0, y = 0, z = 0, w = 0;
+            std::memcpy(&x, vu + 0u, 4u);
+            std::memcpy(&y, vu + 4u, 4u);
+            std::memcpy(&z, vu + 8u, 4u);
+            std::memcpy(&w, vu + 12u, 4u);
+
+            t.Equals(x, 0x11111111u, "V4-32 X");
+            t.Equals(y, 0x22222222u, "V4-32 Y");
+            t.Equals(z, 0x33333333u, "V4-32 Z");
+            t.Equals(w, 0x44444444u, "V4-32 W");
+        });
+
+        tc.Run("VIF UNPACK V4-8 writes and sign extends all four lanes", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            std::memset(mem.getVU1Data(), 0, PS2_VU1_DATA_SIZE);
+
+            std::vector<uint8_t> packet;
+
+            appendU32(
+                packet,
+                makeVifCmd(
+                    0x01u,
+                    0u,
+                    static_cast<uint16_t>((1u << 8) | 1u))); // STCYCL 1:1
+
+            appendU32(packet, makeVifCmd(0x6Eu, 1u, 0u)); // UNPACK V4-8, USN=0
+
+            packet.push_back(0x81u);
+            packet.push_back(0x7Fu);
+            packet.push_back(0x80u);
+            packet.push_back(0xFEu);
+
+            mem.processVIF1Data(
+                packet.data(),
+                static_cast<uint32_t>(packet.size()));
+
+            const uint8_t *vu = mem.getVU1Data();
+
+            uint32_t x = 0, y = 0, z = 0, w = 0;
+            std::memcpy(&x, vu + 0u, 4u);
+            std::memcpy(&y, vu + 4u, 4u);
+            std::memcpy(&z, vu + 8u, 4u);
+            std::memcpy(&w, vu + 12u, 4u);
+
+            t.Equals(x, 0xFFFFFF81u, "V4-8 X");
+            t.Equals(y, 0x0000007Fu, "V4-8 Y");
+            t.Equals(z, 0xFFFFFF80u, "V4-8 Z");
+            t.Equals(w, 0xFFFFFFFEu, "V4-8 W");
+        });
+
         tc.Run("VIF UNPACK bit15 adds TOPS to destination address", [](TestCase &t)
         {
             PS2Memory mem;
