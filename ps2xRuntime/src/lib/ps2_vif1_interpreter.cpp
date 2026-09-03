@@ -804,6 +804,10 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                                     if (mode == 2u)
                                         vif1_regs.row[field] = writeVal;
                                 }
+                                else if (canAdd && mode == 3u)
+                                {
+                                    vif1_regs.row[field] = writeVal;
+                                }
                             }
                         }
                         else if (maskSpec == 1u)

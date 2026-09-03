@@ -1610,6 +1610,122 @@ void register_ps2_memory_tests()
             t.Equals(w, preservedW, "mask=3 should write-protect destination field");
         });
 
+        tc.Run("VIF STMOD offset mode preserves ROW", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            std::memset(mem.getVU1Data(), 0, PS2_VU1_DATA_SIZE);
+
+            std::vector<uint8_t> packet;
+
+            appendU32(
+                packet,
+                makeVifCmd(
+                    0x01u,
+                    0u,
+                    static_cast<uint16_t>((1u << 8) | 1u))); // STCYCL 1:1
+
+            appendU32(packet, makeVifCmd(0x30u, 0u, 0u)); // STROW
+            appendU32(packet, 10u);
+            appendU32(packet, 20u);
+            appendU32(packet, 30u);
+            appendU32(packet, 40u);
+
+            appendU32(
+                packet,
+                makeVifCmd(0x05u, 0u, 1u)); // STMOD offset
+
+            appendU32(
+                packet,
+                makeVifCmd(0x6Cu, 1u, 0u)); // UNPACK V4-32
+
+            appendU32(packet, 1u);
+            appendU32(packet, 2u);
+            appendU32(packet, 3u);
+            appendU32(packet, 4u);
+
+            mem.processVIF1Data(
+                packet.data(),
+                static_cast<uint32_t>(packet.size()));
+
+            const uint8_t *vu = mem.getVU1Data();
+
+            uint32_t x = 0, y = 0, z = 0, w = 0;
+            std::memcpy(&x, vu + 0u, 4u);
+            std::memcpy(&y, vu + 4u, 4u);
+            std::memcpy(&z, vu + 8u, 4u);
+            std::memcpy(&w, vu + 12u, 4u);
+
+            t.Equals(x, 11u, "offset mode X");
+            t.Equals(y, 22u, "offset mode Y");
+            t.Equals(z, 33u, "offset mode Z");
+            t.Equals(w, 44u, "offset mode W");
+
+            t.Equals(mem.vif1_regs.row[0], 10u, "offset mode should preserve ROW X");
+            t.Equals(mem.vif1_regs.row[1], 20u, "offset mode should preserve ROW Y");
+            t.Equals(mem.vif1_regs.row[2], 30u, "offset mode should preserve ROW Z");
+            t.Equals(mem.vif1_regs.row[3], 40u, "offset mode should preserve ROW W");
+        });
+
+        tc.Run("VIF STMOD mode 3 writes data and updates ROW", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            std::memset(mem.getVU1Data(), 0, PS2_VU1_DATA_SIZE);
+
+            std::vector<uint8_t> packet;
+
+            appendU32(
+                packet,
+                makeVifCmd(
+                    0x01u,
+                    0u,
+                    static_cast<uint16_t>((1u << 8) | 1u))); // STCYCL 1:1
+
+            appendU32(packet, makeVifCmd(0x30u, 0u, 0u)); // STROW
+            appendU32(packet, 100u);
+            appendU32(packet, 200u);
+            appendU32(packet, 300u);
+            appendU32(packet, 400u);
+
+            appendU32(
+                packet,
+                makeVifCmd(0x05u, 0u, 3u)); // STMOD mode 3
+
+            appendU32(
+                packet,
+                makeVifCmd(0x6Cu, 1u, 0u)); // UNPACK V4-32
+
+            appendU32(packet, 11u);
+            appendU32(packet, 22u);
+            appendU32(packet, 33u);
+            appendU32(packet, 44u);
+
+            mem.processVIF1Data(
+                packet.data(),
+                static_cast<uint32_t>(packet.size()));
+
+            const uint8_t *vu = mem.getVU1Data();
+
+            uint32_t x = 0, y = 0, z = 0, w = 0;
+            std::memcpy(&x, vu + 0u, 4u);
+            std::memcpy(&y, vu + 4u, 4u);
+            std::memcpy(&z, vu + 8u, 4u);
+            std::memcpy(&w, vu + 12u, 4u);
+
+            // MODE=3 writes raw decompressed data.
+            t.Equals(x, 11u, "mode 3 X should write source data");
+            t.Equals(y, 22u, "mode 3 Y should write source data");
+            t.Equals(z, 33u, "mode 3 Z should write source data");
+            t.Equals(w, 44u, "mode 3 W should write source data");
+
+            // MODE=3 also replaces ROW with that data.
+            t.Equals(mem.vif1_regs.row[0], 11u, "mode 3 should update ROW X");
+            t.Equals(mem.vif1_regs.row[1], 22u, "mode 3 should update ROW Y");
+            t.Equals(mem.vif1_regs.row[2], 33u, "mode 3 should update ROW Z");
+            t.Equals(mem.vif1_regs.row[3], 44u, "mode 3 should update ROW W");
+        });
+
         tc.Run("VIF STMOD offset and difference modes apply to UNPACK data", [](TestCase &t)
         {
             PS2Memory mem;
