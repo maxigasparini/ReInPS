@@ -525,8 +525,6 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
             // STCYCL controls write cycles for UNPACK.
             uint32_t cl = vif1_regs.cycle & 0xFFu;
             uint32_t wl = (vif1_regs.cycle >> 8) & 0xFFu;
-            if (cl == 0u)
-                cl = 1u;
             if (wl == 0u)
                 wl = 256u;
 
@@ -549,7 +547,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
 
             const bool zeroExtend = (imm & 0x4000u) != 0u;
 
-            if (m_vu1Data && totalBytes > 0 && pos + totalBytes <= sizeBytes)
+            if (m_vu1Data && pos + totalBytes <= sizeBytes)
             {
                 const uint8_t *srcBase = data + pos;
                 uint32_t srcIndex = 0u;

@@ -1444,6 +1444,75 @@ void register_ps2_memory_tests()
             t.Equals(v3x, 0xAAAAAAAAu, "second vector should write at addr CL (addr 3)");
         });
 
+        tc.Run("VIF STCYCL CL zero performs pure row filling", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            std::memset(mem.getVU1Data(), 0, PS2_VU1_DATA_SIZE);
+
+            std::vector<uint8_t> packet;
+
+            // STROW.
+            appendU32(packet, makeVifCmd(0x30u, 0u, 0u));
+            appendU32(packet, 0x11111111u);
+            appendU32(packet, 0x22222222u);
+            appendU32(packet, 0x33333333u);
+            appendU32(packet, 0x44444444u);
+
+            // STCYCL: WL=2, CL=0.
+            appendU32(
+                packet,
+                makeVifCmd(
+                    0x01u,
+                    0u,
+                    static_cast<uint16_t>(2u << 8)));
+
+            // UNPACK V4-32, NUM=2.
+            //
+            // CL=0 means filling mode with zero source vectors consumed.
+            // Both output vectors must therefore come entirely from ROW.
+            appendU32(
+                packet,
+                makeVifCmd(0x6Cu, 2u, 0u));
+
+            // There is deliberately NO UNPACK payload here.
+            // The next word must be interpreted as the next VIF command.
+            appendU32(
+                packet,
+                makeVifCmd(0x07u, 0u, 0x1234u)); // MARK
+
+            mem.processVIF1Data(
+                packet.data(),
+                static_cast<uint32_t>(packet.size()));
+
+            const uint8_t *vu = mem.getVU1Data();
+
+            for (uint32_t vector = 0u; vector < 2u; ++vector)
+            {
+                const uint32_t base = vector * 16u;
+
+                uint32_t x = 0u;
+                uint32_t y = 0u;
+                uint32_t z = 0u;
+                uint32_t w = 0u;
+
+                std::memcpy(&x, vu + base + 0u, 4u);
+                std::memcpy(&y, vu + base + 4u, 4u);
+                std::memcpy(&z, vu + base + 8u, 4u);
+                std::memcpy(&w, vu + base + 12u, 4u);
+
+                t.Equals(x, 0x11111111u, "CL=0 fill X should come from ROW");
+                t.Equals(y, 0x22222222u, "CL=0 fill Y should come from ROW");
+                t.Equals(z, 0x33333333u, "CL=0 fill Z should come from ROW");
+                t.Equals(w, 0x44444444u, "CL=0 fill W should come from ROW");
+            }
+
+            t.Equals(
+                mem.vif1_regs.mark,
+                0x1234u,
+                "CL=0 UNPACK should consume no source payload");
+        });
+
         tc.Run("VIF STCYCL WL zero is interpreted as 256", [](TestCase &t)
         {
             PS2Memory mem;
