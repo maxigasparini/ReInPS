@@ -1020,6 +1020,198 @@ void register_ps2_memory_tests()
             t.Equals(sw, 0x00008001u, "zero-extend w");
         });
 
+        tc.Run("VIF UNPACK S-8 USN controls sign and zero extension", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            std::memset(mem.getVU1Data(), 0, PS2_VU1_DATA_SIZE);
+
+            auto run = [&](uint16_t imm)
+            {
+                std::vector<uint8_t> packet;
+
+                appendU32(
+                    packet,
+                    makeVifCmd(
+                        0x01u,
+                        0u,
+                        static_cast<uint16_t>((1u << 8) | 1u))); // STCYCL 1:1
+
+                appendU32(
+                    packet,
+                    makeVifCmd(0x62u, 1u, imm)); // UNPACK S-8, NUM=1
+
+                packet.push_back(0x81u);
+
+                // 1-byte payload rounded to 32-bit boundary.
+                packet.push_back(0u);
+                packet.push_back(0u);
+                packet.push_back(0u);
+
+                mem.processVIF1Data(
+                    packet.data(),
+                    static_cast<uint32_t>(packet.size()));
+            };
+
+            run(0x0000u); // USN=0: signed
+
+            const uint8_t *vu = mem.getVU1Data();
+
+            uint32_t x = 0, y = 0, z = 0, w = 0;
+            std::memcpy(&x, vu + 0u, 4u);
+            std::memcpy(&y, vu + 4u, 4u);
+            std::memcpy(&z, vu + 8u, 4u);
+            std::memcpy(&w, vu + 12u, 4u);
+
+            t.Equals(x, 0xFFFFFF81u, "S-8 signed X");
+            t.Equals(y, 0xFFFFFF81u, "S-8 signed Y");
+            t.Equals(z, 0xFFFFFF81u, "S-8 signed Z");
+            t.Equals(w, 0xFFFFFF81u, "S-8 signed W");
+
+            run(0x4000u); // USN=1: unsigned
+
+            std::memcpy(&x, vu + 0u, 4u);
+            std::memcpy(&y, vu + 4u, 4u);
+            std::memcpy(&z, vu + 8u, 4u);
+            std::memcpy(&w, vu + 12u, 4u);
+
+            t.Equals(x, 0x00000081u, "S-8 unsigned X");
+            t.Equals(y, 0x00000081u, "S-8 unsigned Y");
+            t.Equals(z, 0x00000081u, "S-8 unsigned Z");
+            t.Equals(w, 0x00000081u, "S-8 unsigned W");
+        });
+
+        tc.Run("VIF UNPACK V2-16 USN controls sign and zero extension", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            std::memset(mem.getVU1Data(), 0, PS2_VU1_DATA_SIZE);
+
+            auto appendU16 = [](std::vector<uint8_t> &packet, uint16_t value)
+            {
+                packet.push_back(static_cast<uint8_t>(value & 0xFFu));
+                packet.push_back(static_cast<uint8_t>((value >> 8) & 0xFFu));
+            };
+
+            auto run = [&](uint16_t imm)
+            {
+                std::vector<uint8_t> packet;
+
+                appendU32(
+                    packet,
+                    makeVifCmd(
+                        0x01u,
+                        0u,
+                        static_cast<uint16_t>((1u << 8) | 1u))); // STCYCL 1:1
+
+                appendU32(
+                    packet,
+                    makeVifCmd(0x65u, 1u, imm)); // UNPACK V2-16, NUM=1
+
+                appendU16(packet, 0x8001u); // X
+                appendU16(packet, 0xFF80u); // Y
+
+                mem.processVIF1Data(
+                    packet.data(),
+                    static_cast<uint32_t>(packet.size()));
+            };
+
+            run(0x0000u);
+
+            const uint8_t *vu = mem.getVU1Data();
+
+            uint32_t x = 0, y = 0, z = 0, w = 0;
+            std::memcpy(&x, vu + 0u, 4u);
+            std::memcpy(&y, vu + 4u, 4u);
+            std::memcpy(&z, vu + 8u, 4u);
+            std::memcpy(&w, vu + 12u, 4u);
+
+            t.Equals(x, 0xFFFF8001u, "V2-16 signed X");
+            t.Equals(y, 0xFFFFFF80u, "V2-16 signed Y");
+            t.Equals(z, 0xFFFF8001u, "V2-16 signed Z");
+            t.Equals(w, 0xFFFFFF80u, "V2-16 signed W");
+
+            run(0x4000u);
+
+            std::memcpy(&x, vu + 0u, 4u);
+            std::memcpy(&y, vu + 4u, 4u);
+            std::memcpy(&z, vu + 8u, 4u);
+            std::memcpy(&w, vu + 12u, 4u);
+
+            t.Equals(x, 0x00008001u, "V2-16 unsigned X");
+            t.Equals(y, 0x0000FF80u, "V2-16 unsigned Y");
+            t.Equals(z, 0x00008001u, "V2-16 unsigned Z");
+            t.Equals(w, 0x0000FF80u, "V2-16 unsigned W");
+        });
+
+        tc.Run("VIF UNPACK V3-8 USN applies to XYZ and following W value", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            std::memset(mem.getVU1Data(), 0, PS2_VU1_DATA_SIZE);
+
+            auto run = [&](uint16_t imm)
+            {
+                std::vector<uint8_t> packet;
+
+                appendU32(
+                    packet,
+                    makeVifCmd(
+                        0x01u,
+                        0u,
+                        static_cast<uint16_t>((1u << 8) | 1u))); // STCYCL 1:1
+
+                appendU32(
+                    packet,
+                    makeVifCmd(0x6Au, 2u, imm)); // UNPACK V3-8, NUM=2
+
+                // First vector.
+                packet.push_back(0x81u); // AX
+                packet.push_back(0x7Fu); // AY
+                packet.push_back(0x80u); // AZ
+
+                // BX is W observed by the first vector.
+                packet.push_back(0xFEu); // BX
+                packet.push_back(0x01u); // BY
+                packet.push_back(0x02u); // BZ
+
+                // 6-byte payload rounded to 8.
+                packet.push_back(0u);
+                packet.push_back(0u);
+
+                mem.processVIF1Data(
+                    packet.data(),
+                    static_cast<uint32_t>(packet.size()));
+            };
+
+            run(0x0000u);
+
+            const uint8_t *vu = mem.getVU1Data();
+
+            uint32_t x = 0, y = 0, z = 0, w = 0;
+            std::memcpy(&x, vu + 0u, 4u);
+            std::memcpy(&y, vu + 4u, 4u);
+            std::memcpy(&z, vu + 8u, 4u);
+            std::memcpy(&w, vu + 12u, 4u);
+
+            t.Equals(x, 0xFFFFFF81u, "V3-8 signed X");
+            t.Equals(y, 0x0000007Fu, "V3-8 signed Y");
+            t.Equals(z, 0xFFFFFF80u, "V3-8 signed Z");
+            t.Equals(w, 0xFFFFFFFEu, "V3-8 signed W");
+
+            run(0x4000u);
+
+            std::memcpy(&x, vu + 0u, 4u);
+            std::memcpy(&y, vu + 4u, 4u);
+            std::memcpy(&z, vu + 8u, 4u);
+            std::memcpy(&w, vu + 12u, 4u);
+
+            t.Equals(x, 0x00000081u, "V3-8 unsigned X");
+            t.Equals(y, 0x0000007Fu, "V3-8 unsigned Y");
+            t.Equals(z, 0x00000080u, "V3-8 unsigned Z");
+            t.Equals(w, 0x000000FEu, "V3-8 unsigned W");
+        });
+
         tc.Run("VIF UNPACK bit15 adds TOPS to destination address", [](TestCase &t)
         {
             PS2Memory mem;
