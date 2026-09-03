@@ -1380,28 +1380,49 @@ void register_ps2_memory_tests()
 
             mem.vif1_regs.tops = 4u;
 
-            // UNPACK V4-32, num=1, addr=2, bit15 set => effective addr = 6.
             std::vector<uint8_t> packet;
-            appendU32(packet, makeVifCmd(0x6Cu, 1u, static_cast<uint16_t>(0x8000u | 0x0002u)));
+
+            appendU32(
+                packet,
+                makeVifCmd(
+                    0x01u,
+                    0u,
+                    static_cast<uint16_t>((1u << 8) | 1u))); // STCYCL: WL=1, CL=1
+
+            // UNPACK V4-32, num=1, addr=2, bit15 set => effective addr = 6.
+            appendU32(
+                packet,
+                makeVifCmd(
+                    0x6Cu,
+                    1u,
+                    static_cast<uint16_t>(0x8000u | 0x0002u)));
+
             appendU32(packet, 0x11111111u);
             appendU32(packet, 0x22222222u);
             appendU32(packet, 0x33333333u);
             appendU32(packet, 0x44444444u);
 
-            mem.processVIF1Data(packet.data(), static_cast<uint32_t>(packet.size()));
+            mem.processVIF1Data(
+                packet.data(),
+                static_cast<uint32_t>(packet.size()));
 
             const uint8_t *vu1 = mem.getVU1Data();
 
             uint32_t untouched = 0xDEADBEEFu;
             std::memcpy(&untouched, vu1 + (2u * 16u), 4);
-            t.Equals(untouched, 0u, "base addr without TOPS should remain untouched");
+            t.Equals(
+                untouched,
+                0u,
+                "base addr without TOPS should remain untouched");
 
             uint32_t x = 0, y = 0, z = 0, w = 0;
             const uint32_t dest = 6u * 16u;
+
             std::memcpy(&x, vu1 + dest + 0u, 4);
             std::memcpy(&y, vu1 + dest + 4u, 4);
             std::memcpy(&z, vu1 + dest + 8u, 4);
             std::memcpy(&w, vu1 + dest + 12u, 4);
+
             t.Equals(x, 0x11111111u, "TOPS-adjusted x");
             t.Equals(y, 0x22222222u, "TOPS-adjusted y");
             t.Equals(z, 0x33333333u, "TOPS-adjusted z");
@@ -2115,7 +2136,7 @@ void register_ps2_memory_tests()
             const uint32_t offsetCmd = makeVifCmd(0x02u, 0u, 0x0022u);
             mem.processVIF1Data(reinterpret_cast<const uint8_t *>(&offsetCmd), sizeof(offsetCmd));
             t.Equals(mem.vif1_regs.ofst, 0x22u, "OFFSET should update OFST");
-            t.Equals(mem.vif1_regs.base, 0x120u, "OFFSET should copy old TOPS into BASE");
+            t.Equals(mem.vif1_regs.base, 0x120u, "OFFSET should preserve BASE");
             t.IsTrue((mem.vif1_regs.stat & (1u << 7)) == 0u, "OFFSET should clear DBF");
             t.Equals(mem.vif1_regs.tops, 0x120u, "DBF=0 should keep TOPS at BASE");
 
@@ -2143,6 +2164,172 @@ void register_ps2_memory_tests()
             mem.processVIF1Data(reinterpret_cast<const uint8_t *>(&mscntCmd), sizeof(mscntCmd));
             t.IsTrue((mem.vif1_regs.stat & (1u << 7)) == 0u, "MSCNT should toggle DBF again");
             t.Equals(mem.vif1_regs.tops, 0x30u, "DBF=0 should restore TOPS to BASE");
+        });
+
+        tc.Run("VIF OFFSET preserves BASE and resets TOPS to BASE", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+
+            mem.vif1_regs.base = 0x120u;
+            mem.vif1_regs.tops = 0x2A0u;
+            mem.vif1_regs.stat = (1u << 7); // DBF=1
+
+            const uint32_t cmd =
+                makeVifCmd(0x02u, 0u, 0x0034u); // OFFSET 0x34
+
+            mem.processVIF1Data(
+                reinterpret_cast<const uint8_t *>(&cmd),
+                sizeof(cmd));
+
+            t.Equals(
+                mem.vif1_regs.base,
+                0x120u,
+                "OFFSET should not modify BASE");
+
+            t.Equals(
+                mem.vif1_regs.ofst,
+                0x34u,
+                "OFFSET should update OFST");
+
+            t.Equals(
+                mem.vif1_regs.tops,
+                0x120u,
+                "OFFSET should reset TOPS to BASE");
+
+            t.IsTrue(
+                (mem.vif1_regs.stat & (1u << 7)) == 0u,
+                "OFFSET should clear DBF");
+        });
+
+        tc.Run("VIF BASE updates BASE without changing current TOPS", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+
+            mem.vif1_regs.base = 0x100u;
+            mem.vif1_regs.tops = 0x280u;
+
+            const uint32_t cmd =
+                makeVifCmd(0x03u, 0u, 0x0055u); // BASE 0x55
+
+            mem.processVIF1Data(
+                reinterpret_cast<const uint8_t *>(&cmd),
+                sizeof(cmd));
+
+            t.Equals(
+                mem.vif1_regs.base,
+                0x55u,
+                "BASE should update BASE register");
+
+            t.Equals(
+                mem.vif1_regs.tops,
+                0x280u,
+                "BASE should preserve current TOPS");
+        });
+
+        tc.Run("VIF MSCAL alternates double buffers after latching TOP and ITOP", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+
+            struct Call
+            {
+                uint32_t top;
+                uint32_t itop;
+            };
+
+            std::vector<Call> calls;
+
+            mem.setVu1MscalCallback(
+                [&](uint32_t, uint32_t top, uint32_t itop)
+                {
+                    calls.push_back({top, itop});
+                });
+
+            // BASE = 0x100.
+            uint32_t cmd = makeVifCmd(0x03u, 0u, 0x0100u);
+            mem.processVIF1Data(
+                reinterpret_cast<const uint8_t *>(&cmd),
+                sizeof(cmd));
+
+            // OFFSET = 0x40.
+            // This also sets TOPS=BASE and DBF=0.
+            cmd = makeVifCmd(0x02u, 0u, 0x0040u);
+            mem.processVIF1Data(
+                reinterpret_cast<const uint8_t *>(&cmd),
+                sizeof(cmd));
+
+            // Pending ITOP for first execution.
+            cmd = makeVifCmd(0x04u, 0u, 0x0022u);
+            mem.processVIF1Data(
+                reinterpret_cast<const uint8_t *>(&cmd),
+                sizeof(cmd));
+
+            // First MSCAL:
+            // run TOP must be BASE (0x100),
+            // then next TOPS becomes BASE+OFST (0x140).
+            cmd = makeVifCmd(0x14u, 0u, 0x0001u);
+            mem.processVIF1Data(
+                reinterpret_cast<const uint8_t *>(&cmd),
+                sizeof(cmd));
+
+            t.Equals(
+                calls.size(),
+                static_cast<size_t>(1u),
+                "first MSCAL should invoke callback");
+
+            t.Equals(calls[0].top, 0x100u, "first MSCAL should run from BASE buffer");
+            t.Equals(calls[0].itop, 0x22u, "first MSCAL should latch pending ITOPS");
+
+            t.Equals(mem.vif1_regs.top, 0x100u, "first MSCAL TOP");
+            t.Equals(mem.vif1_regs.itop, 0x22u, "first MSCAL ITOP");
+            t.Equals(mem.vif1_regs.tops, 0x140u, "next TOPS should select BASE+OFST");
+
+            t.IsTrue(
+                (mem.vif1_regs.stat & (1u << 7)) != 0u,
+                "first MSCAL should set DBF");
+
+            // New pending ITOP for second execution.
+            cmd = makeVifCmd(0x04u, 0u, 0x0033u);
+            mem.processVIF1Data(
+                reinterpret_cast<const uint8_t *>(&cmd),
+                sizeof(cmd));
+
+            // Second MSCAL:
+            // must run with TOP=0x140 first,
+            // then prepare TOPS=BASE for the next buffer.
+            cmd = makeVifCmd(0x14u, 0u, 0x0002u);
+            mem.processVIF1Data(
+                reinterpret_cast<const uint8_t *>(&cmd),
+                sizeof(cmd));
+
+            t.Equals(
+                calls.size(),
+                static_cast<size_t>(2u),
+                "second MSCAL should invoke callback");
+
+            t.Equals(
+                calls[1].top,
+                0x140u,
+                "second MSCAL should run from BASE+OFST buffer");
+
+            t.Equals(
+                calls[1].itop,
+                0x33u,
+                "second MSCAL should latch new pending ITOPS");
+
+            t.Equals(mem.vif1_regs.top, 0x140u, "second MSCAL TOP");
+            t.Equals(mem.vif1_regs.itop, 0x33u, "second MSCAL ITOP");
+
+            t.Equals(
+                mem.vif1_regs.tops,
+                0x100u,
+                "next TOPS should return to BASE");
+
+            t.IsTrue(
+                (mem.vif1_regs.stat & (1u << 7)) == 0u,
+                "second MSCAL should clear DBF");
         });
 
         tc.Run("VIF MSKPATH3 uses immediate bit15", [](TestCase &t)
