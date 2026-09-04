@@ -805,8 +805,14 @@ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uin
         return;
     }
 
-    const uint32_t ztestMethod = static_cast<uint32_t>((ctx.test >> 17) & 3u);
+    const bool zTestEnabled =
+        ((ctx.test >> 16) & 0x1u) != 0u;
+
+    const uint32_t ztestMethod =
+        static_cast<uint32_t>((ctx.test >> 17) & 3u);
+
     const bool alphaBlendEnabled = state.prim.abe;
+
     const bool preserveDestinationAlpha = writeMask.writeRgb && !writeMask.writeAlpha && fpsm == GS_PSM_CT32;
     const bool destinationAlphaTestNeedsRead = ((ctx.test >> 14) & 0x1u) != 0u && (fpsm == GS_PSM_CT32 || fpsm == GS_PSM_CT16 || fpsm == GS_PSM_CT16S);
 
@@ -837,24 +843,28 @@ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uin
         return;
     }
 
-    bool zpass = false;
+    bool zpass = true;
     uint32_t storedZ = 0u;
-    switch (ztestMethod)
+
+    if (zTestEnabled)
     {
-    case 0:
-        zpass = false;
-        break;
-    case 1:
-        zpass = true;
-        break;
-    case 2:
-        storedZ = ReadVramUnlocked(zpsm, zbp, fbw, x, y);
-        zpass = static_cast<uint32_t>(z) >= storedZ;
-        break;
-    case 3:
-        storedZ = ReadVramUnlocked(zpsm, zbp, fbw, x, y);
-        zpass = static_cast<uint32_t>(z) > storedZ;
-        break;
+        switch (ztestMethod)
+        {
+        case 0:
+            zpass = false;
+            break;
+        case 1:
+            zpass = true;
+            break;
+        case 2:
+            storedZ = ReadVramUnlocked(zpsm, zbp, fbw, x, y);
+            zpass = static_cast<uint32_t>(z) >= storedZ;
+            break;
+        case 3:
+            storedZ = ReadVramUnlocked(zpsm, zbp, fbw, x, y);
+            zpass = static_cast<uint32_t>(z) > storedZ;
+            break;
+        }
     }
 
     if (!zpass)
@@ -934,7 +944,9 @@ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uin
         WriteVramUnlocked(fpsm, fbp, fbw, x, y, pixel);
     }
 
-    if (writeMask.writeDepth && !ctx.zbuf.zmask)
+    if (writeMask.writeDepth &&
+        zTestEnabled &&
+        !ctx.zbuf.zmask)
     {
         WriteVramUnlocked(zpsm, zbp, fbw, x, y, z);
     }

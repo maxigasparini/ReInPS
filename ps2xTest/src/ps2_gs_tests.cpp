@@ -3658,6 +3658,35 @@ void register_ps2_gs_tests()
                      "ZMSK should preserve depth");
         });
 
+        tc.Run("GS disabled Z test accepts framebuffer writes and preserves depth", [](TestCase &t)
+        {
+            constexpr uint32_t kInitialFramebuffer = 0xAB030201u;
+            constexpr uint32_t kInitialDepth = 0x11111111u;
+
+            // ZTE = 0. ZTST bits are also zero (NEVER), but they must be ignored
+            // while the Z test is disabled.
+            constexpr uint64_t kTest = 0ull;
+
+            const GsPixelTestResult result =
+                drawGsPixelForTests(
+                    GS_PSM_CT32,
+                    kTest,
+                    false,
+                    kInitialFramebuffer,
+                    kInitialDepth,
+                    0x80u);
+
+            t.Equals(
+                result.framebuffer,
+                0x80563412u,
+                "ZTE=0 should allow the framebuffer write regardless of ZTST");
+
+            t.Equals(
+                result.depth,
+                kInitialDepth,
+                "ZTE=0 should preserve the depth buffer");
+        });
+
         tc.Run("GS DATE and DATM inspect the framebuffer-format alpha bit", [](TestCase &t)
         {
             constexpr uint32_t kInitialDepth = 0x11111111u;
