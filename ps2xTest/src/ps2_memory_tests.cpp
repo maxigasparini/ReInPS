@@ -2445,6 +2445,55 @@ void register_ps2_memory_tests()
             t.Equals(firstBytes[1], static_cast<uint8_t>(0xD2u), "DIRECTHL packet should drain after PATH3 IMAGE packet");
         });
 
+        tc.Run("VIF DIRECTHL stalls behind queued PATH3 IMAGE2 packets", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+
+            std::vector<uint8_t> firstBytes;
+            GifArbiter arbiter([&](const uint8_t *data, uint32_t sizeBytes)
+            {
+                if (data && sizeBytes > 0u)
+                    firstBytes.push_back(data[0]);
+            });
+            mem.setGifArbiter(&arbiter);
+
+            std::vector<uint8_t> path3Image2;
+            appendU64(path3Image2, makeGifTag(0x00ABu, 3u, 0u, true)); // IMAGE2 packet marker: first byte 0xAB
+            appendU64(path3Image2, 0ull);
+            mem.submitGifPacket(
+                GifPathId::Path3,
+                path3Image2.data(),
+                static_cast<uint32_t>(path3Image2.size()),
+                false);
+
+            std::vector<uint8_t> vifPacket;
+            appendU32(vifPacket, makeVifCmd(0x51u, 0u, 1u)); // DIRECTHL 1 QW
+            for (uint32_t i = 0; i < 16u; ++i)
+            {
+                vifPacket.push_back(static_cast<uint8_t>(0xD2u + i));
+            }
+
+            mem.processVIF1Data(
+                vifPacket.data(),
+                static_cast<uint32_t>(vifPacket.size()));
+
+            t.Equals(
+                firstBytes.size(),
+                static_cast<size_t>(2u),
+                "PATH3 IMAGE2 and DIRECTHL packets should both drain");
+
+            t.Equals(
+                firstBytes[0],
+                static_cast<uint8_t>(0xABu),
+                "DIRECTHL should not preempt queued PATH3 IMAGE2 packet");
+
+            t.Equals(
+                firstBytes[1],
+                static_cast<uint8_t>(0xD2u),
+                "DIRECTHL packet should drain after PATH3 IMAGE2 packet");
+        });
+
         tc.Run("GIF DMA mode0 copies RDRAM packet and clears channel", [](TestCase &t)
         {
             PS2Memory mem;
