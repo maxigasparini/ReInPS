@@ -1,5 +1,6 @@
 #ifndef PS2_RUNTIME_MACROS_H
 #define PS2_RUNTIME_MACROS_H
+#include <limits>
 #include <cstdint>
 #include <cmath>
 #include <cstring>
@@ -147,6 +148,226 @@ static inline uint32_t ps2_plzcw32(uint32_t x)
 #define PS2_VDIV(a, b) _mm_div_ps((__m128)(a), (__m128)(b))
 #define PS2_VMULQ(a, q) _mm_mul_ps((__m128)(a), _mm_set1_ps(q))
 #define PS2_VBLEND(a, b, mask) PS2_BLENDV_PS((__m128)(a), (__m128)(b), (__m128)(mask))
+
+
+// ---------------------------------------------------------------------
+// VU0 macro-mode FMAC exact-result MAC flags.
+//
+// This mirrors the VU1 interpreter's normalizeOperand() +
+// calculateFmacExactResult() + normalizeFmacExactResult() behavior for
+// MUL / MADD / MSUB operations.
+//
+// Current MAC layout:
+//   bits  0..3  : Zero
+//   bits  4..7  : Sign
+//   bits  8..11 : Underflow
+//   bits 12..15 : Overflow
+//
+// Component/lane mapping:
+//   X = 0x8, Y = 0x4, Z = 0x2, W = 0x1
+//
+// STATUS sticky flags and FMAC pipeline latency are intentionally not
+// modeled here yet.
+// ---------------------------------------------------------------------
+
+static inline float PS2_VU0_NORMALIZE_FMAC_OPERAND(float value)
+{
+    uint32_t bits = 0u;
+    std::memcpy(&bits, &value, sizeof(bits));
+
+    const uint32_t exponent = (bits >> 23) & 0xFFu;
+
+    if (exponent == 0u)
+    {
+        // Flush zero/subnormal operand to signed zero.
+        bits &= 0x80000000u;
+    }
+    else if (exponent == 0xFFu)
+    {
+        // Clamp Inf/NaN-like operand to maximum finite value.
+        bits = (bits & 0x80000000u) | 0x7F7FFFFFu;
+    }
+
+    std::memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+static inline uint8_t PS2_VU0_NORMALIZE_FMAC_EXACT_RESULT(
+    float &value,
+    long double exactResult)
+{
+    const bool negative = std::signbit(exactResult);
+    const long double magnitude = std::fabs(exactResult);
+
+    const long double maximum =
+        static_cast<long double>(std::numeric_limits<float>::max());
+
+    const long double minimum =
+        static_cast<long double>(std::numeric_limits<float>::min());
+
+    uint8_t flags = negative ? 0x2u : 0u;
+
+    uint32_t bits = negative ? 0x80000000u : 0u;
+
+    if (magnitude == 0.0L)
+    {
+        flags |= 0x1u;
+        std::memcpy(&value, &bits, sizeof(value));
+    }
+    else if (magnitude > maximum)
+    {
+        flags |= 0x8u;
+        bits |= 0x7F7FFFFFu;
+        std::memcpy(&value, &bits, sizeof(value));
+    }
+    else if (magnitude < minimum)
+    {
+        flags |= 0x5u;
+        std::memcpy(&value, &bits, sizeof(value));
+    }
+
+    return flags;
+}
+
+template <typename TContext>
+static inline __m128 PS2_VU0_APPLY_FMAC_EXACT_MAC_IMPL(
+    TContext *ctx,
+    __m128 roundedResult,
+    __m128 accBefore,
+    __m128 lhs,
+    __m128 rhs,
+    uint8_t destMask,
+    uint8_t operation)
+{
+    // operation:
+    //   0 = MUL
+    //   1 = ACC + lhs * rhs
+    //   2 = ACC - lhs * rhs
+
+    alignas(16) float resultValues[4];
+    alignas(16) float accValues[4];
+    alignas(16) float lhsValues[4];
+    alignas(16) float rhsValues[4];
+
+    _mm_storeu_ps(resultValues, roundedResult);
+    _mm_storeu_ps(accValues, accBefore);
+    _mm_storeu_ps(lhsValues, lhs);
+    _mm_storeu_ps(rhsValues, rhs);
+
+    uint32_t mac = 0u;
+
+    for (uint32_t component = 0u; component < 4u; ++component)
+    {
+        const uint32_t lane = 1u << (3u - component);
+
+        if ((destMask & lane) == 0u)
+            continue;
+
+        const float left =
+            PS2_VU0_NORMALIZE_FMAC_OPERAND(lhsValues[component]);
+
+        const float right =
+            PS2_VU0_NORMALIZE_FMAC_OPERAND(rhsValues[component]);
+
+        long double exactResult =
+            static_cast<long double>(left) *
+            static_cast<long double>(right);
+
+        if (operation != 0u)
+        {
+            const float acc =
+                PS2_VU0_NORMALIZE_FMAC_OPERAND(accValues[component]);
+
+            if (operation == 1u)
+            {
+                exactResult =
+                    static_cast<long double>(acc) + exactResult;
+            }
+            else
+            {
+                exactResult =
+                    static_cast<long double>(acc) - exactResult;
+            }
+        }
+
+        const uint8_t flags =
+            PS2_VU0_NORMALIZE_FMAC_EXACT_RESULT(
+                resultValues[component],
+                exactResult);
+
+        if ((flags & 0x1u) != 0u)
+            mac |= lane;
+
+        if ((flags & 0x2u) != 0u)
+            mac |= lane << 4;
+
+        if ((flags & 0x4u) != 0u)
+            mac |= lane << 8;
+
+        if ((flags & 0x8u) != 0u)
+            mac |= lane << 12;
+    }
+
+    ctx->vu0_mac_flags = mac;
+
+    return _mm_loadu_ps(resultValues);
+}
+
+template <typename TContext>
+static inline __m128 PS2_VU0_APPLY_FMAC_MUL_EXACT_MAC(
+    TContext *ctx,
+    __m128 roundedResult,
+    __m128 lhs,
+    __m128 rhs,
+    uint8_t destMask)
+{
+    return PS2_VU0_APPLY_FMAC_EXACT_MAC_IMPL(
+        ctx,
+        roundedResult,
+        _mm_setzero_ps(),
+        lhs,
+        rhs,
+        destMask,
+        0u);
+}
+
+template <typename TContext>
+static inline __m128 PS2_VU0_APPLY_FMAC_MADD_EXACT_MAC(
+    TContext *ctx,
+    __m128 roundedResult,
+    __m128 accBefore,
+    __m128 lhs,
+    __m128 rhs,
+    uint8_t destMask)
+{
+    return PS2_VU0_APPLY_FMAC_EXACT_MAC_IMPL(
+        ctx,
+        roundedResult,
+        accBefore,
+        lhs,
+        rhs,
+        destMask,
+        1u);
+}
+
+template <typename TContext>
+static inline __m128 PS2_VU0_APPLY_FMAC_MSUB_EXACT_MAC(
+    TContext *ctx,
+    __m128 roundedResult,
+    __m128 accBefore,
+    __m128 lhs,
+    __m128 rhs,
+    uint8_t destMask)
+{
+    return PS2_VU0_APPLY_FMAC_EXACT_MAC_IMPL(
+        ctx,
+        roundedResult,
+        accBefore,
+        lhs,
+        rhs,
+        destMask,
+        2u);
+}
 
 // Memory access helpers - Hybrid Fast/Slow Path
 // Fast path: Direct RDRAM access (masked).
@@ -623,7 +844,7 @@ inline __m128i ps2_u64_to_epi64_pair(uint64_t value)
 #define FPU_FLOOR_W_S(a) ((int32_t)floorf((float)(a)))
 #define FPU_CVT_S_W(a) ((float)(int32_t)(a))
 #define FPU_CVT_S_L(a) ((float)(int64_t)(a))
-#define FPU_CVT_W_S(a) ((int32_t)nearbyintf((float)(a)))
+#define FPU_CVT_W_S(a) ((int32_t)(float)(a)) // EE CVT.W.S always rounds toward zero
 #define FPU_CVT_L_S(a) ((int64_t)(float)(a))
 #define FPU_C_F_S(a, b) (0)
 #define FPU_C_UN_S(a, b) (isnan((float)(a)) || isnan((float)(b)))
