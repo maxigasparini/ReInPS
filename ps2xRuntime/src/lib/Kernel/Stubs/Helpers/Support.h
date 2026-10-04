@@ -1362,6 +1362,8 @@ namespace
         uint32_t tadr = payloadPhys;
         uint32_t chcr = 0x00000181u; // DIR=1, TIE=1, STR=1 (normal mode).
 
+        PS2Memory &mem = runtime->memory();
+
         if (preferNormalCount)
         {
             qwc = normalizeQwcFromArg(countArg);
@@ -1369,10 +1371,31 @@ namespace
         }
         else
         {
-            chcr = 0x00000185u; // MODE=1 chain, DIR=1, TIE=1, STR=1.
+            // Match the original sceDmaSend implementation at
+            // guest 0x202B24..0x202B40:
+            //
+            //   newCHCR = (oldCHCR & ~0x0C) | 0x105
+            //
+            // Only MOD is replaced with chain mode; TTE, TIE and the
+            // remaining guest-configured CHCR bits are preserved.
+            const uint32_t currentChcr =
+                mem.readIORegister(channelBase + 0x00u);
+
+            chcr =
+                (currentChcr & ~0x0Cu) |
+                0x00000105u;
         }
 
-        PS2Memory &mem = runtime->memory();
+        // Preserve the previous normal-count ToSPR behavior.
+        // Chain-mode sceDmaSend already preserves TTE through currentChcr.
+        if (preferNormalCount &&
+            channelBase == 0x1000D400u)
+        {
+            chcr |=
+                mem.readIORegister(channelBase + 0x00u) &
+                0x40u;
+        }
+
         mem.writeIORegister(channelBase + 0x20u, qwc & 0xFFFFu);
         mem.writeIORegister(channelBase + 0x10u, madr);
         mem.writeIORegister(channelBase + 0x30u, tadr);
