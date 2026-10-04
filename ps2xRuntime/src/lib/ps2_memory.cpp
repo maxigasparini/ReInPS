@@ -1479,20 +1479,19 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
 
                         const bool tteEnabled = (chcr & (1u << 6)) != 0u;
 
-			const bool compactVifLocalTag =
+			// TTE (Tag Transfer Enable) sends the upper 64 bits of every
+			// source-chain DMA tag into VIF0/VIF1. This also applies to
+			// REFE/REF/REFS: their payload comes from ADDR, but their tag
+			// data must still precede that payload in the VIF stream.
+			const bool transferVifTag =
 			    tteEnabled &&
-			    (channelBase == 0x10009000u || channelBase == 0x10008000u) &&
-			    (id == 1u || id == 2u || id == 5u || id == 6u || id == 7u);
-			if (compactVifLocalTag)
-                            appendCompactVif1TagData(currentTagAddr, 0u);
+			    (channelBase == 0x10009000u || channelBase == 0x10008000u);
 
-                        if (hasPayload)
-                        {
-                            if (compactVifLocalTag)
-                                appendData(currentTagAddr + 16u, tagQwc);
-                            else
-                                appendData(dataAddr, tagQwc);
-                        }
+			if (transferVifTag)
+			    appendCompactVif1TagData(currentTagAddr, 0u);
+
+			if (hasPayload)
+			    appendData(dataAddr, tagQwc);
                         if (irq && tieEnabled)
                             endChain = true;
                         if (endChain)
