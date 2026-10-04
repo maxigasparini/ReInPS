@@ -289,6 +289,15 @@ namespace ps2_syscalls
         case static_cast<uint32_t>(-0x78):
             ps2_stubs::sceSifSetDChain(rdram, ctx, runtime);
             return true;
+
+        // PS2SDK raw kernel syscalls used by stripped SIFCMD/SIFRPC code.
+        case 0x79:
+            ps2_stubs::sceSifSetReg(rdram, ctx, runtime);
+            return true;
+        case 0x7A:
+            ps2_stubs::sceSifGetReg(rdram, ctx, runtime);
+            return true;
+
         case 0x7F:
             GetMemorySize(rdram, ctx, runtime);
             return true;
