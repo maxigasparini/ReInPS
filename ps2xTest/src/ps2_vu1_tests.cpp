@@ -144,6 +144,13 @@ namespace
                (static_cast<uint32_t>(is & 0xFu) << 11);
     }
 
+    uint32_t makeVuJalr(uint8_t it, uint8_t is)
+    {
+        return (0x25u << 25) |
+            (static_cast<uint32_t>(it & 0xFu) << 16) |
+            (static_cast<uint32_t>(is & 0xFu) << 11);
+    }
+
     uint32_t makeVuIbne(uint8_t is, uint8_t it, int16_t imm)
     {
         return (0x29u << 25) |
@@ -1053,41 +1060,64 @@ void register_ps2_vu1_tests()
                      "the flag-driven branch should arrive at its target");
         });
 
-        tc.Run("JR shares the one-instruction VI branch visibility rule", [](TestCase &t)
+        tc.Run("JR uses the current VI value after an immediately preceding write", [](TestCase &t)
         {
             Vu1Fixture fx;
             t.IsTrue(fx.initialize(), "VU1 fixture should initialize");
 
             writeVuInstructionPair(
-                fx.code, 0u, makeVuIaddiu(1u, 0u, 2),
+                fx.code, 0u, makeVuIaddiu(1u, 0u, 4),
                 kVuUpperNop);
             writeVuInstructionPair(
                 fx.code, 8u, makeVuJr(1u),
                 kVuUpperNop);
             writeVuInstructionPair(
-                fx.code, 16u, makeVuIaddiu(2u, 0u, 2),
-                kVuUpperNop);
-            writeVuInstructionPair(
-                fx.code, 24u, makeVuIaddiu(3u, 0u, 3),
-                kVuUpperNop);
-            writeVuInstructionPair(
-                fx.code, 32u, makeVuIaddiu(4u, 0u, 4),
+                fx.code, 16u, 0u,
                 kVuUpperNop);
 
             VU1Interpreter vu1;
-            vu1.state().vi[1] = 4;
-            vu1.execute(fx.code, PS2_VU1_CODE_SIZE,
-                        fx.data, PS2_VU1_DATA_SIZE, fx.gs, &fx.mem,
-                        0u, 0u, 0u, 4u);
+            vu1.state().vi[1] = 3;
 
-            t.Equals(vu1.state().vi[1], 2,
-                     "the pending IALU write should still commit normally");
-            t.Equals(vu1.state().vi[2], 2,
-                     "JR should execute exactly one delay-slot pair");
-            t.Equals(vu1.state().vi[3], 0,
-                     "JR should skip the sequential instruction after its delay slot");
-            t.Equals(vu1.state().vi[4], 4,
-                     "JR immediately after a VI write should branch using the previous VI value");
+            vu1.execute(
+                fx.code, PS2_VU1_CODE_SIZE,
+                fx.data, PS2_VU1_DATA_SIZE,
+                fx.gs, &fx.mem,
+                0u, 0u, 0u, 3u);
+
+            t.Equals(vu1.state().vi[1], 4,
+                     "the preceding IADDIU should publish the new VI value");
+            t.Equals(vu1.state().pc, static_cast<uint32_t>(0x20u),
+                     "JR should branch using the current VI value");
+        });
+
+        tc.Run("JALR uses the current VI value after an immediately preceding write", [](TestCase &t)
+        {
+            Vu1Fixture fx;
+            t.IsTrue(fx.initialize(), "VU1 fixture should initialize");
+
+            writeVuInstructionPair(
+                fx.code, 0u, makeVuIaddiu(14u, 0u, 0x29B),
+                kVuUpperNop);
+            writeVuInstructionPair(
+                fx.code, 8u, makeVuJalr(14u, 14u),
+                kVuUpperNop);
+            writeVuInstructionPair(
+                fx.code, 16u, 0u,
+                kVuUpperNop);
+
+            VU1Interpreter vu1;
+            vu1.state().vi[14] = 0x43;
+
+            vu1.execute(
+                fx.code, PS2_VU1_CODE_SIZE,
+                fx.data, PS2_VU1_DATA_SIZE,
+                fx.gs, &fx.mem,
+                0u, 0u, 0u, 3u);
+
+            t.Equals(vu1.state().pc, static_cast<uint32_t>(0x14D8u),
+                     "JALR should branch using the current VI value");
+            t.Equals(vu1.state().vi[14], 3,
+                     "JALR should still write its link address");
         });
 
         tc.Run("MPG upload invalidates cached VU1 decode before MSCAL", [](TestCase &t)
